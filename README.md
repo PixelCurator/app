@@ -1,5 +1,11 @@
 # PixelCurator (native app)
 
+<!-- OpenSSF Scorecard badge — the api.scorecard.dev badge only resolves for
+     PUBLIC repos. Uncomment this once the repo is made public (and flip
+     publish_results to true in .github/workflows/scorecard.yml):
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/PixelCurator/app/badge)](https://scorecard.dev/viewer/?uri=github.com/PixelCurator/app)
+-->
+
 Standalone SwiftUI app for **iPhone, iPad, and Mac** that sorts your photo
 library into albums with on-device ML suggestions. Distributed via TestFlight.
 

@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "A1A1A1A1-0000-0000-0000-000000000001",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:PixelCurator.xcodeproj",
+        "identifier" : "511F04BC9E8D635324DDB2B6",
+        "name" : "PixelCuratorTests"
+      }
+    }
+  ],
+  "version" : 1
+}

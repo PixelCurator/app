@@ -25,6 +25,12 @@ targets:
       testTargets:
         - PixelCuratorTests
         - PixelCuratorUITests
+      # UnitTests is the default plan → Xcode Cloud runs only the stable unit
+      # tests. AllTests (incl. the iOS UI test) is for local/manual full runs.
+      testPlans:
+        - path: TestPlans/UnitTests.xctestplan
+          defaultPlan: true
+        - path: TestPlans/AllTests.xctestplan
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yves.vogl.pixelcurator

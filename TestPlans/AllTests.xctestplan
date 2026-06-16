@@ -1,0 +1,31 @@
+{
+  "configurations" : [
+    {
+      "id" : "A2A2A2A2-0000-0000-0000-000000000002",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:PixelCurator.xcodeproj",
+        "identifier" : "511F04BC9E8D635324DDB2B6",
+        "name" : "PixelCuratorTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:PixelCurator.xcodeproj",
+        "identifier" : "4AF3CC20D613261B9F18F847",
+        "name" : "PixelCuratorUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

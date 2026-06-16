@@ -21,11 +21,15 @@ struct PhotoGridView: View {
     @Environment(AlbumManager.self) private var albums
     @Environment(\.embeddingIndexer) private var indexer
     @Environment(\.similaritySearch) private var search
+    @Environment(\.activeVariant) private var activeVariant
+    @Environment(\.entitlementProvider) private var entitlementProvider
+    @Environment(\.switchVariant) private var switchVariant
 
     @State private var selectedAsset: PHAsset?
     @State private var showAssignDialog = false
     @State private var similarAssetItem: IdentifiableAsset?
     @State private var toast: String?
+    @State private var showVariantSettings = false
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
@@ -60,6 +64,13 @@ struct PhotoGridView: View {
                         indexingProgressView(indexer: indexer)
                     }
                 }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showVariantSettings = true
+                    } label: {
+                        Label("Quality", systemImage: "cpu")
+                    }
+                }
             }
             .overlay(alignment: .bottom) {
                 if let toast {
@@ -83,6 +94,13 @@ struct PhotoGridView: View {
                 // …plus a default PixelCurator bucket to prove create-on-demand.
                 Button("➕ PixelCurator") { assign(to: "PixelCurator") }
                 Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showVariantSettings) {
+                VariantSettingsView(
+                    currentVariant: activeVariant,
+                    entitlements: entitlementProvider,
+                    onVariantChange: switchVariant
+                )
             }
             .sheet(item: $similarAssetItem) { item in
                 if let search {

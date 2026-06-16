@@ -23,6 +23,7 @@ targets:
       - PixelCurator
     scheme:
       testTargets:
+        - PixelCuratorTests
         - PixelCuratorUITests
     settings:
       base:
@@ -40,6 +41,18 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         # macOS window behaviour
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Yves Vogl"
+
+  PixelCuratorTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - PixelCuratorTests
+    dependencies:
+      - target: PixelCurator
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.kadenz.pixelcurator.tests
+        GENERATE_INFOPLIST_FILE: YES
 
   PixelCuratorUITests:
     type: bundle.ui-testing

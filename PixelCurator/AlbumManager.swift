@@ -33,6 +33,25 @@ final class AlbumManager {
         albums = collected.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
+    /// Returns the `PHAsset.localIdentifier`s of every asset in the album
+    /// identified by `albumLocalIdentifier`.
+    ///
+    /// Uses a direct `PHAssetCollection` fetch by identifier so that no prior
+    /// `loadAlbums()` call is required. Returns an empty array if the collection
+    /// cannot be found or the app lacks photo-library access.
+    func memberAssetIDs(of albumLocalIdentifier: String) -> [String] {
+        let result = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [albumLocalIdentifier], options: nil
+        )
+        guard let collection = result.firstObject else { return [] }
+        var ids: [String] = []
+        let assets = PHAsset.fetchAssets(in: collection, options: nil)
+        assets.enumerateObjects { asset, _, _ in
+            ids.append(asset.localIdentifier)
+        }
+        return ids
+    }
+
     // MARK: - Write
 
     /// Adds an asset to a named album, creating the album if it does not exist.

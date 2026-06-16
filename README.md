@@ -51,7 +51,7 @@ xcodebuild test -scheme PixelCurator \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
-Bundle id: `live.kadenz.pixelcurator` · Team: `6T5T32GRR3` (Yves Vogl).
+Bundle id: `yves.vogl.pixelcurator` · Team: `6T5T32GRR3` (Yves Vogl).
 
 ## Roadmap
 

@@ -13,6 +13,10 @@ actor Embedder {
 
     private let model: MLModel
 
+    /// Built once at init and reused across embeds — recreating the Vision
+    /// wrapper per call is wasteful during bulk indexing of thousands of photos.
+    private let visionModel: VNCoreMLModel
+
     // MARK: - Public state
 
     /// Dimensionality of the embedding vectors this model produces.
@@ -51,6 +55,7 @@ actor Embedder {
 
         self.model = loaded
         self.embeddingDimension = dimension
+        self.visionModel = try VNCoreMLModel(for: loaded)
     }
 
     // MARK: - Inference
@@ -64,7 +69,6 @@ actor Embedder {
     /// - Returns: An L2-normalised `[Float]` of length `embeddingDimension`.
     /// - Throws: If the Vision request fails or produces no result.
     func embed(_ cgImage: CGImage) async throws -> [Float] {
-        let visionModel = try VNCoreMLModel(for: model)
         let request = VNCoreMLRequest(model: visionModel)
         // Center-crop matches CLIP's expected square input crop.
         request.imageCropAndScaleOption = .centerCrop

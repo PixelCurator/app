@@ -6,13 +6,15 @@ struct PixelCuratorApp: App {
     @State private var library = PhotoController()
     @State private var albums = AlbumManager()
     @State private var indexer: EmbeddingIndexer?
+    @State private var similaritySearch: SimilaritySearch?
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(library)
                 .environment(albums)
-                .environment(indexer)
+                .environment(\.embeddingIndexer, indexer)
+                .environment(\.similaritySearch, similaritySearch)
                 .task { await bootIndexer() }
         }
         #if os(macOS)
@@ -38,6 +40,14 @@ struct PixelCuratorApp: App {
                 modelStore: ModelStore()
             )
             self.indexer = newIndexer
+
+            // SimilaritySearch uses its own context on the same persistent store.
+            let searchContainer = try ModelContainer(for: PhotoEmbedding.self)
+            self.similaritySearch = SimilaritySearch(
+                embedder: embedder,
+                context: searchContainer.mainContext,
+                library: library
+            )
         } catch {
             print("PixelCuratorApp: failed to boot indexer: \(error)")
         }

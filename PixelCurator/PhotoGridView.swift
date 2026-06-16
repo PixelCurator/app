@@ -25,11 +25,14 @@ struct PhotoGridView: View {
     @Environment(\.entitlementProvider) private var entitlementProvider
     @Environment(\.switchVariant) private var switchVariant
 
+    @Environment(\.sortingCoordinator) private var sortingCoordinator
+
     @State private var selectedAsset: PHAsset?
     @State private var showAssignDialog = false
     @State private var similarAssetItem: IdentifiableAsset?
     @State private var toast: String?
     @State private var showVariantSettings = false
+    @State private var showSortingInbox = false
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
@@ -71,6 +74,14 @@ struct PhotoGridView: View {
                         Label("Quality", systemImage: "cpu")
                     }
                 }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showSortingInbox = true
+                    } label: {
+                        Label("Sort Inbox", systemImage: "tray.full")
+                    }
+                    .disabled(sortingCoordinator == nil)
+                }
             }
             .overlay(alignment: .bottom) {
                 if let toast {
@@ -111,6 +122,13 @@ struct PhotoGridView: View {
                     // Search engine still initialising — show a brief loading state.
                     ProgressView("Loading…")
                         .padding()
+                }
+            }
+            .sheet(isPresented: $showSortingInbox) {
+                if let coordinator = sortingCoordinator {
+                    SortingInboxView(coordinator: coordinator)
+                        .environment(library)
+                        .environment(albums)
                 }
             }
             .task(id: library.assets.count) {

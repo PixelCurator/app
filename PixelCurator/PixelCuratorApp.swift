@@ -7,6 +7,7 @@ struct PixelCuratorApp: App {
     @State private var albums = AlbumManager()
     @State private var indexer: EmbeddingIndexer?
     @State private var similaritySearch: SimilaritySearch?
+    @State private var sortingCoordinator: SortingCoordinator?
 
     /// The active CLIP variant. Changing this triggers variant-switch orchestration.
     @State private var activeVariant: CLIPVariant = .bundledDefault
@@ -30,6 +31,7 @@ struct PixelCuratorApp: App {
                 .environment(\.activeVariant, activeVariant)
                 .environment(\.entitlementProvider, entitlements)
                 .environment(\.switchVariant, switchVariant(_:))
+                .environment(\.sortingCoordinator, sortingCoordinator)
                 .task { await bootIndexer(variant: .bundledDefault) }
         }
         #if os(macOS)
@@ -67,6 +69,17 @@ struct PixelCuratorApp: App {
                 variant: variant
             )
             self.activeVariant = variant
+
+            // Build SortingCoordinator with its own ModelContext, following the
+            // same per-service container pattern used by the indexer and search.
+            let sortingContainer = try ModelContainer(for: PhotoEmbedding.self)
+            self.sortingCoordinator = SortingCoordinator(
+                store: EmbeddingStore(context: sortingContainer.mainContext),
+                suggester: AlbumSuggester(),
+                albumManager: albums,
+                photoController: library,
+                modelID: variant.modelID
+            )
         } catch {
             print("PixelCuratorApp: failed to boot indexer for \(variant.displayName): \(error)")
         }

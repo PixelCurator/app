@@ -41,6 +41,9 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         # macOS window behaviour
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Yves Vogl"
+        # Export compliance: app uses only exempt (Apple/OS-provided) encryption,
+        # so uploads skip the manual encryption question in App Store Connect.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
 
   PixelCuratorTests:
     type: bundle.unit-test

@@ -134,6 +134,10 @@ final class DecisionLog {
     /// On success the decision moves to the redo stack.
     func undo() async {
         guard let decision = stack.popUndo() else { return }
+        // Reset first so undoing two assignments to the *same* album still
+        // produces a nil -> value transition that @Observable observers (the
+        // toast) can detect; otherwise the second toast is silently dropped.
+        lastUndoneAlbumName = nil
         let ok = await operations.remove(decision.asset, fromAlbumNamed: decision.albumName)
         if ok {
             stack.pushRedo(decision)
@@ -151,6 +155,9 @@ final class DecisionLog {
     /// On success the decision moves back onto the undo stack.
     func redo() async {
         guard let decision = stack.popRedo() else { return }
+        // Reset first (see undo) so a repeat redo to the same album still
+        // produces an observable nil -> value transition for the toast.
+        lastRedoneAlbumName = nil
         let ok = await operations.assign(decision.asset, toAlbumNamed: decision.albumName)
         if ok {
             stack.pushUndo(decision)

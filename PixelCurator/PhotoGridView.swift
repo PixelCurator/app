@@ -17,6 +17,8 @@ private struct IdentifiableAsset: Identifiable {
 // MARK: - PhotoGridView
 
 struct PhotoGridView: View {
+    var onShowInbox: () -> Void = {}
+
     @Environment(PhotoController.self) private var library
     @Environment(AlbumManager.self) private var albums
     @Environment(\.embeddingIndexer) private var indexer
@@ -33,8 +35,6 @@ struct PhotoGridView: View {
     @State private var similarAssetItem: IdentifiableAsset?
     @State private var toast: String?
     @State private var showVariantSettings = false
-    @State private var showSortingInbox = false
-    @State private var showAlbums = false
     @State private var unsortedCount: Int = 0
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
@@ -44,7 +44,7 @@ struct PhotoGridView: View {
             ScrollView {
                 if unsortedCount > 0 {
                     Button {
-                        showSortingInbox = true
+                        onShowInbox()
                     } label: {
                         HStack {
                             // Icon is interpolated INTO the Text (not a standalone
@@ -101,19 +101,6 @@ struct PhotoGridView: View {
                 }
                 ToolbarItem(placement: .automatic) {
                     Button {
-                        showSortingInbox = true
-                    } label: {
-                        if unsortedCount > 0 {
-                            Label("Sort Inbox (\(unsortedCount))", systemImage: "tray.full")
-                        } else {
-                            Label("Sort Inbox", systemImage: "tray.full")
-                        }
-                    }
-                    .disabled(sortingCoordinator == nil)
-                    .accessibilityIdentifier("toolbar-sorting-inbox")
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button {
                         Task {
                             await decisionLog?.undo()
                             if let name = decisionLog?.lastUndoneAlbumName {
@@ -125,14 +112,6 @@ struct PhotoGridView: View {
                     }
                     .disabled(!(decisionLog?.canUndo ?? false))
                     .accessibilityIdentifier("toolbar-undo")
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        showAlbums = true
-                    } label: {
-                        Label("Albums", systemImage: "rectangle.stack")
-                    }
-                    .accessibilityIdentifier("toolbar-albums")
                 }
             }
             .overlay(alignment: .bottom) {
@@ -173,18 +152,6 @@ struct PhotoGridView: View {
                     ProgressView("Loading…")
                         .padding()
                 }
-            }
-            .sheet(isPresented: $showSortingInbox) {
-                if let coordinator = sortingCoordinator {
-                    SortingInboxView(coordinator: coordinator)
-                        .environment(library)
-                        .environment(albums)
-                }
-            }
-            .sheet(isPresented: $showAlbums) {
-                AlbumsListView()
-                    .environment(albums)
-                    .environment(library)
             }
             .task(id: library.assets.count) {
                 // Kick off background indexing once assets are loaded.

@@ -42,10 +42,16 @@ final class PhotoController {
 
     // MARK: - Assets
 
-    func loadAssets(limit: Int = 500) {
+    /// Loads image assets newest-first. `limit == 0` (the default) loads the
+    /// entire library — required so that every existing-album photo is embedded
+    /// and available as a labeled point for `AlbumSuggester`, and so the sorting
+    /// inbox sees all unsorted photos rather than only the 500 most recent.
+    func loadAssets(limit: Int = 0) {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.fetchLimit = limit
+        if limit > 0 {
+            options.fetchLimit = limit
+        }
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var collected: [PHAsset] = []
         collected.reserveCapacity(result.count)

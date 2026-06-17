@@ -182,6 +182,21 @@ final class SortingCoordinator {
         advance()
     }
 
+    // MARK: - Grid tap-to-sort
+
+    /// Album suggestions for an arbitrary asset (the grid's tap-to-sort flow),
+    /// independent of the inbox queue. Returns [] if the asset has no stored
+    /// embedding yet (e.g. indexing still running).
+    func suggestions(for asset: PHAsset) -> [AlbumSuggestion] {
+        suggester.suggestions(
+            for: asset.localIdentifier,
+            modelID: modelID,
+            store: store,
+            albumManager: albumManager,
+            corrections: correctionStore
+        )
+    }
+
     // MARK: - Private
 
     /// Records a correction when the chosen album differs from the top suggestion

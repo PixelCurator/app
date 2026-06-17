@@ -60,15 +60,18 @@ final class PhotoEmbedding {
     }
 
     /// Decodes a little-endian raw-bytes `Data` blob back into a Float32 array.
+    ///
+    /// Copies through `copyBytes` rather than `assumingMemoryBound`: a `Data`
+    /// loaded from SwiftData is not guaranteed to be 4-byte aligned, and
+    /// reinterpreting an unaligned buffer as `Float` is undefined behaviour
+    /// (an alignment trap on ARM). `copyBytes` memcpy's into the aligned
+    /// `[Float]` storage, which is correct for any source alignment.
     static func decode(_ data: Data) -> [Float] {
-        data.withUnsafeBytes { ptr in
-            guard let base = ptr.baseAddress else { return [] }
-            let count = data.count / MemoryLayout<Float>.size
-            return Array(UnsafeBufferPointer(
-                start: base.assumingMemoryBound(to: Float.self),
-                count: count
-            ))
-        }
+        let count = data.count / MemoryLayout<Float>.size
+        guard count > 0 else { return [] }
+        var floats = [Float](repeating: 0, count: count)
+        _ = floats.withUnsafeMutableBytes { data.copyBytes(to: $0) }
+        return floats
     }
 
     // MARK: - Computed

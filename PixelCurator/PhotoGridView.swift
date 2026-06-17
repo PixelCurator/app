@@ -29,7 +29,7 @@ struct PhotoGridView: View {
     @Environment(\.decisionLog) private var decisionLog
 
     @State private var selectedAsset: PHAsset?
-    @State private var showAssignDialog = false
+    @State private var assignAssetItem: IdentifiableAsset?
     @State private var similarAssetItem: IdentifiableAsset?
     @State private var toast: String?
     @State private var showVariantSettings = false
@@ -48,7 +48,7 @@ struct PhotoGridView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedAsset = asset
-                                showAssignDialog = true
+                                assignAssetItem = IdentifiableAsset(asset)
                             }
                             .contextMenu {
                                 Button {
@@ -111,18 +111,16 @@ struct PhotoGridView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .confirmationDialog(
-                "Add to album",
-                isPresented: $showAssignDialog,
-                titleVisibility: .visible
-            ) {
-                // A few existing albums as quick targets…
-                ForEach(albums.albums.prefix(8)) { album in
-                    Button(album.title) { assign(to: album.title) }
-                }
-                // …plus a default PixelCurator bucket to prove create-on-demand.
-                Button("➕ PixelCurator") { assign(to: "PixelCurator") }
-                Button("Cancel", role: .cancel) {}
+            .sheet(item: $assignAssetItem) { item in
+                AssignSuggestionSheet(
+                    asset: item.asset,
+                    allAlbums: albums.albums,
+                    sortingCoordinator: sortingCoordinator,
+                    onAssign: { albumName in
+                        selectedAsset = item.asset
+                        assign(to: albumName)
+                    }
+                )
             }
             .sheet(isPresented: $showVariantSettings) {
                 VariantSettingsView(
@@ -192,6 +190,90 @@ struct PhotoGridView: View {
         withAnimation { toast = message }
         try? await Task.sleep(for: .seconds(2))
         withAnimation { toast = nil }
+    }
+}
+
+// MARK: - Assign Suggestion Sheet
+
+/// A sheet that shows ranked album suggestions (via AlbumSuggester k-NN) for a
+/// tapped photo, plus the full album list as a fallback picker.
+private struct AssignSuggestionSheet: View {
+    let asset: PHAsset
+    let allAlbums: [AlbumManager.Album]
+    let sortingCoordinator: SortingCoordinator?
+    let onAssign: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var suggestions: [AlbumSuggestion] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // --- Suggestions section ---
+                if !suggestions.isEmpty {
+                    Section("Top Suggestions") {
+                        ForEach(suggestions.prefix(5)) { suggestion in
+                            Button {
+                                onAssign(suggestion.albumTitle)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(suggestion.albumTitle)
+                                            .foregroundStyle(.primary)
+                                        Text("\(suggestion.supportingCount) matches")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text("\(Int((suggestion.score * 100).rounded()))%")
+                                        .font(.callout.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                } else {
+                    Section {
+                        Text("No suggestions yet — indexing may still be running")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // --- All albums section ---
+                if !allAlbums.isEmpty {
+                    Section("All Albums") {
+                        ForEach(allAlbums) { album in
+                            Button {
+                                onAssign(album.title)
+                                dismiss()
+                            } label: {
+                                Text(album.title)
+                                    .foregroundStyle(.primary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to album")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .accessibilityIdentifier("assign-suggestion-sheet")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                suggestions = sortingCoordinator?.suggestions(for: asset) ?? []
+            }
+        }
     }
 }
 

@@ -117,18 +117,23 @@ final class WalkthroughUITests: XCTestCase {
 
         capture(screenshot: app.screenshot(), name: "04-variant-settings")
 
-        // MARK: - Step 5: Dismiss, tap thumbnail, navigate back, tap Undo
+        // MARK: - Step 5: Dismiss, tap thumbnail → assign suggestion sheet, tap Undo
 
         dismissSheet(app)
 
-        // Open a thumbnail detail by tapping it (shows confirmationDialog).
+        // Open a thumbnail by tapping it — now shows the ranked-suggestion sheet.
         let thumb = app.images.firstMatch
         if thumb.waitForExistence(timeout: 5) && thumb.isHittable {
             thumb.tap()
-            // Dismiss the confirmation dialog if it appeared.
+            // Hard assertion: the new assign-suggestion sheet must appear.
+            XCTAssertTrue(app.navigationBars["Add to album"].waitForExistence(timeout: 8),
+                          "Assign suggestion sheet did not appear")
+            // Dismiss via Cancel button if present, else swipe down.
             let cancel = app.buttons["Cancel"]
             if cancel.waitForExistence(timeout: 3) {
                 cancel.tap()
+            } else {
+                dismissSheet(app)
             }
         }
 
@@ -165,7 +170,7 @@ final class WalkthroughUITests: XCTestCase {
     /// navigation bars is present, which reliably clears the sheet before the
     /// next step interacts with the grid underneath.
     private func dismissSheet(_ app: XCUIApplication) {
-        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality"]
+        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality", "Add to album"]
         if sheetNavs.contains(where: { app.navigationBars[$0].exists }) {
             app.swipeDown(velocity: .fast)
         }

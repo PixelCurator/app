@@ -56,6 +56,7 @@ struct PhotoGridView: View {
                                 } label: {
                                     Label("Find Similar", systemImage: "sparkle.magnifyingglass")
                                 }
+                                .accessibilityIdentifier("context-find-similar")
                             }
                     }
                 }
@@ -74,6 +75,7 @@ struct PhotoGridView: View {
                     } label: {
                         Label("Quality", systemImage: "cpu")
                     }
+                    .accessibilityIdentifier("toolbar-variant-settings")
                 }
                 ToolbarItem(placement: .automatic) {
                     Button {
@@ -82,6 +84,7 @@ struct PhotoGridView: View {
                         Label("Sort Inbox", systemImage: "tray.full")
                     }
                     .disabled(sortingCoordinator == nil)
+                    .accessibilityIdentifier("toolbar-sorting-inbox")
                 }
                 ToolbarItem(placement: .automatic) {
                     Button {
@@ -95,6 +98,7 @@ struct PhotoGridView: View {
                         Label("Undo", systemImage: "arrow.uturn.backward")
                     }
                     .disabled(!(decisionLog?.canUndo ?? false))
+                    .accessibilityIdentifier("toolbar-undo")
                 }
             }
             .overlay(alignment: .bottom) {

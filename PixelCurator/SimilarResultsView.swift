@@ -37,6 +37,7 @@ struct SimilarResultsView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .accessibilityIdentifier("similar-results-view")
             .task {
                 results = await search.similarAssets(to: queryAsset.localIdentifier)
                 hasSearched = true

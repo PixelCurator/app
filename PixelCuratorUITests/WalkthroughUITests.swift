@@ -151,6 +151,18 @@ final class WalkthroughUITests: XCTestCase {
         }
 
         capture(screenshot: app.screenshot(), name: "05-undo")
+
+        // MARK: - Step 6: Soft check — CTA banner (indexing may not be done yet)
+
+        // Wait up to ~15s for the inbox CTA banner to appear. This is a soft
+        // check: indexing time varies across machines, so we only capture a
+        // screenshot if found and never hard-assert.
+        let ctaBanner = app.otherElements["inbox-cta"].waitForExistence(timeout: 15)
+            ? app.otherElements["inbox-cta"]
+            : (app.buttons["inbox-cta"].waitForExistence(timeout: 1) ? app.buttons["inbox-cta"] : nil)
+        if ctaBanner != nil {
+            capture(screenshot: app.screenshot(), name: "06-inbox-cta")
+        }
     }
 
     // MARK: - Helpers

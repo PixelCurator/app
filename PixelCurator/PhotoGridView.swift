@@ -34,12 +34,33 @@ struct PhotoGridView: View {
     @State private var toast: String?
     @State private var showVariantSettings = false
     @State private var showSortingInbox = false
+    @State private var unsortedCount: Int = 0
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
     var body: some View {
         NavigationStack {
             ScrollView {
+                if unsortedCount > 0 {
+                    Button {
+                        showSortingInbox = true
+                    } label: {
+                        HStack {
+                            // Icon is interpolated INTO the Text (not a standalone
+                            // Image) so it renders no separate accessibility image
+                            // element above the grid — otherwise `app.images`
+                            // queries would match it instead of a grid thumbnail.
+                            Text("\(Image(systemName: "tray.full"))  Sort \(unsortedCount) photo\(unsortedCount == 1 ? "" : "s") →")
+                                .fontWeight(.medium)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(.thinMaterial)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("inbox-cta")
+                }
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(library.assets, id: \.localIdentifier) { asset in
                         ThumbnailCell(asset: asset)
@@ -81,7 +102,11 @@ struct PhotoGridView: View {
                     Button {
                         showSortingInbox = true
                     } label: {
-                        Label("Sort Inbox", systemImage: "tray.full")
+                        if unsortedCount > 0 {
+                            Label("Sort Inbox (\(unsortedCount))", systemImage: "tray.full")
+                        } else {
+                            Label("Sort Inbox", systemImage: "tray.full")
+                        }
                     }
                     .disabled(sortingCoordinator == nil)
                     .accessibilityIdentifier("toolbar-sorting-inbox")
@@ -155,6 +180,11 @@ struct PhotoGridView: View {
                 if !indexer.isIndexing {
                     await indexer.index(assets: library.assets)
                 }
+                unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
+            }
+            .task(id: indexer?.isIndexing) {
+                // Recompute the sortable count whenever indexing finishes.
+                unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
             }
         }
     }

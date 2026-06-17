@@ -182,6 +182,24 @@ final class SortingCoordinator {
         advance()
     }
 
+    // MARK: - Cheap count for discoverability
+
+    /// Cheap count of photos eligible for sorting (embedded AND not in any
+    /// album), without building the full queue. Drives the grid's "N to sort"
+    /// affordance. Safe to call on the main actor whenever the library or index
+    /// changes.
+    func unsortedCount() -> Int {
+        let albumMembers = albumManager.albums.reduce(into: Set<String>()) { set, album in
+            set.formUnion(albumManager.memberAssetIDs(of: album.id))
+        }
+        let embedded = store.embeddedAssetIDs(modelID: modelID)
+        return SortingCoordinator.filterInbox(
+            allAssetIDs: photoController.assets.map(\.localIdentifier),
+            embedded: embedded,
+            albumMembers: albumMembers
+        ).count
+    }
+
     // MARK: - Grid tap-to-sort
 
     /// Album suggestions for an arbitrary asset (the grid's tap-to-sort flow),

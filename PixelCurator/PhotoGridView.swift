@@ -224,6 +224,10 @@ struct PhotoGridView: View {
             let ok = await albums.assign(asset, toAlbumNamed: albumName)
             if ok {
                 decisionLog?.record(asset: asset, albumName: albumName)
+                // The photo is now in an album, so it leaves the sortable set —
+                // refresh the inbox count/CTA, which otherwise stays stale until
+                // the next indexing event.
+                unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
             }
             await showToast(ok ? "Added to \(albumName)" : (albums.lastError ?? "Failed"))
         }

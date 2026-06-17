@@ -48,20 +48,17 @@ struct EmbeddingStore {
 
     /// Returns the embedding for `(assetID, modelID)`, or `nil` if not indexed yet.
     func embedding(assetID: String, modelID: String) -> PhotoEmbedding? {
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26; revisit when fixed.
         let compositeKey = "\(assetID)|\(modelID)"
-        var descriptor = FetchDescriptor<PhotoEmbedding>(
-            predicate: #Predicate { $0.key == compositeKey }
-        )
-        descriptor.fetchLimit = 1
-        return try? context.fetch(descriptor).first
+        let all = (try? context.fetch(FetchDescriptor<PhotoEmbedding>())) ?? []
+        return all.first { $0.key == compositeKey }
     }
 
     /// Returns all embeddings produced by `modelID`.
     func allEmbeddings(modelID: String) -> [PhotoEmbedding] {
-        let descriptor = FetchDescriptor<PhotoEmbedding>(
-            predicate: #Predicate { $0.modelID == modelID }
-        )
-        return (try? context.fetch(descriptor)) ?? []
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26; revisit when fixed.
+        let all = (try? context.fetch(FetchDescriptor<PhotoEmbedding>())) ?? []
+        return all.filter { $0.modelID == modelID }
     }
 
     /// Returns the set of `assetID`s that already have an embedding for `modelID`.

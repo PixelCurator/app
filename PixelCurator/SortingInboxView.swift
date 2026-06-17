@@ -49,6 +49,7 @@ struct SortingInboxView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .accessibilityIdentifier("sorting-inbox-view")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }

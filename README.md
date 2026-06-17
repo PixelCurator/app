@@ -57,6 +57,11 @@ Bundle id: `yves.vogl.pixelcurator` · Team: `6T5T32GRR3` (Yves Vogl).
 
 - **M1 — skeleton + critical chain** ✅ PhotoKit read+write, grid, assign-to-album,
   builds for iOS + macOS, UI test green.
-- **M2 — on-device brain** — Apple MobileCLIP (Core ML) embeddings in the
-  background, local store (SwiftData), similarity search.
-- **M3 — sorting flow** — ML suggestions, inbox flow, undo/redo, on-device retrain.
+- **M2 — on-device brain** ✅ MobileCLIP (Core ML) **S0** embeddings indexed in
+  the background, SwiftData store, **find-similar** (cosine top-K), multi-variant
+  support + StoreKit IAP scaffold.
+- **M3 — sorting flow** ✅ k-NN **album suggestions**, single-card **sorting
+  inbox** (accept / skip / pick-other), **undo/redo** of assignments, and
+  **corrections-aware** suggestions (assigning against a suggestion feeds back
+  as a labeled example — a lightweight on-device "retrain").
+- **M4 — TBD.**

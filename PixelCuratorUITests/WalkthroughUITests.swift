@@ -163,6 +163,29 @@ final class WalkthroughUITests: XCTestCase {
         if ctaBanner != nil {
             capture(screenshot: app.screenshot(), name: "06-inbox-cta")
         }
+
+        // MARK: - Step 7: Soft check — Albums sheet
+
+        let albumsButton = app.buttons["toolbar-albums"]
+        if albumsButton.waitForExistence(timeout: 5) {
+            albumsButton.tap()
+
+            // Soft wait for the Albums navigation bar or the list element.
+            let albumsNavFound = app.navigationBars["Albums"].waitForExistence(timeout: 8)
+            let albumsListFound = albumsNavFound || app.otherElements["albums-list"].waitForExistence(timeout: 1)
+
+            if albumsNavFound || albumsListFound {
+                capture(screenshot: app.screenshot(), name: "07-albums")
+            }
+
+            // Dismiss via Done button if present, else swipe down.
+            let doneButton = app.buttons["Done"]
+            if doneButton.waitForExistence(timeout: 3) {
+                doneButton.tap()
+            } else {
+                dismissSheet(app)
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -182,7 +205,7 @@ final class WalkthroughUITests: XCTestCase {
     /// navigation bars is present, which reliably clears the sheet before the
     /// next step interacts with the grid underneath.
     private func dismissSheet(_ app: XCUIApplication) {
-        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality", "Add to album"]
+        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality", "Add to album", "Albums"]
         if sheetNavs.contains(where: { app.navigationBars[$0].exists }) {
             app.swipeDown(velocity: .fast)
         }

@@ -74,4 +74,32 @@ final class PhotoController {
             }
         }
     }
+
+    // MARK: - CGImage (for ML inference)
+
+    /// Returns a CGImage for `asset` at the given `targetSize`, or `nil` on failure.
+    ///
+    /// Uses `.highQualityFormat` so the completion fires exactly once.
+    /// Network access is disabled — inference works on locally available copies.
+    func requestCGImage(for asset: PHAsset, targetSize: CGSize) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .fast
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+            imageManager.requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: options
+            ) { image, _ in
+#if canImport(UIKit)
+                continuation.resume(returning: image?.cgImage)
+#else
+                continuation.resume(returning: image?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+#endif
+            }
+        }
+    }
 }

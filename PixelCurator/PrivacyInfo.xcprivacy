@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- PixelCurator is on-device / standalone: photos are read and processed
+	     locally via PhotoKit and never transmitted off the device. Nothing is
+	     "collected" in Apple's sense (collection = linking to identity or sending
+	     off device), so NSPrivacyCollectedDataTypes is empty. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<!-- Required-reason APIs: none declared yet. Revisit when adding code that
+	     touches a required-reason category (e.g. UserDefaults -> CA92.1,
+	     file timestamp -> C617.1, disk space -> E174.1, system boot time -> 35F9.1).
+	     SwiftData / PhotoKit / Core ML themselves are not required-reason APIs. -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

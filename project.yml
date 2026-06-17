@@ -1,6 +1,6 @@
 name: PixelCurator
 options:
-  bundleIdPrefix: live.kadenz
+  bundleIdPrefix: yves.vogl
   deploymentTarget:
     iOS: "17.0"
     macOS: "14.0"
@@ -23,10 +23,17 @@ targets:
       - PixelCurator
     scheme:
       testTargets:
+        - PixelCuratorTests
         - PixelCuratorUITests
+      # UnitTests is the default plan → Xcode Cloud runs only the stable unit
+      # tests. AllTests (incl. the iOS UI test) is for local/manual full runs.
+      testPlans:
+        - path: TestPlans/UnitTests.xctestplan
+          defaultPlan: true
+        - path: TestPlans/AllTests.xctestplan
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: live.kadenz.pixelcurator
+        PRODUCT_BUNDLE_IDENTIFIER: yves.vogl.pixelcurator
         PRODUCT_NAME: PixelCurator
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_ENTITLEMENTS: PixelCurator/PixelCurator.entitlements
@@ -40,6 +47,21 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         # macOS window behaviour
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Yves Vogl"
+        # Export compliance: app uses only exempt (Apple/OS-provided) encryption,
+        # so uploads skip the manual encryption question in App Store Connect.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+
+  PixelCuratorTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - PixelCuratorTests
+    dependencies:
+      - target: PixelCurator
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yves.vogl.pixelcurator.tests
+        GENERATE_INFOPLIST_FILE: YES
 
   PixelCuratorUITests:
     type: bundle.ui-testing
@@ -50,6 +72,6 @@ targets:
       - target: PixelCurator
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: live.kadenz.pixelcurator.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: yves.vogl.pixelcurator.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: PixelCurator

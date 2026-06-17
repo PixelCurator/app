@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>identifier</key>
+	<string>PixelCuratorProducts</string>
+	<key>nonConsumableProducts</key>
+	<array>
+		<dict>
+			<key>displayPrice</key>
+			<string>1.99</string>
+			<key>familyShareable</key>
+			<false/>
+			<key>internalID</key>
+			<string>yves.vogl.pixelcurator.quality.s1</string>
+			<key>localizations</key>
+			<array>
+				<dict>
+					<key>description</key>
+					<string>Upgrade to MobileCLIP S1 for higher-quality on-device photo understanding.</string>
+					<key>displayName</key>
+					<string>Quality: MobileCLIP S1</string>
+					<key>locale</key>
+					<string>en_US</string>
+				</dict>
+			</array>
+			<key>productID</key>
+			<string>yves.vogl.pixelcurator.quality.s1</string>
+			<key>referenceName</key>
+			<string>Quality S1</string>
+			<key>type</key>
+			<string>NonConsumable</string>
+		</dict>
+		<dict>
+			<key>displayPrice</key>
+			<string>2.99</string>
+			<key>familyShareable</key>
+			<false/>
+			<key>internalID</key>
+			<string>yves.vogl.pixelcurator.quality.s2</string>
+			<key>localizations</key>
+			<array>
+				<dict>
+					<key>description</key>
+					<string>Upgrade to MobileCLIP S2 for even higher-quality on-device photo understanding.</string>
+					<key>displayName</key>
+					<string>Quality: MobileCLIP S2</string>
+					<key>locale</key>
+					<string>en_US</string>
+				</dict>
+			</array>
+			<key>productID</key>
+			<string>yves.vogl.pixelcurator.quality.s2</string>
+			<key>referenceName</key>
+			<string>Quality S2</string>
+			<key>type</key>
+			<string>NonConsumable</string>
+		</dict>
+		<dict>
+			<key>displayPrice</key>
+			<string>3.99</string>
+			<key>familyShareable</key>
+			<false/>
+			<key>internalID</key>
+			<string>yves.vogl.pixelcurator.quality.b</string>
+			<key>localizations</key>
+			<array>
+				<dict>
+					<key>description</key>
+					<string>Upgrade to MobileCLIP B for the best on-device photo understanding available.</string>
+					<key>displayName</key>
+					<string>Quality: MobileCLIP B (Best)</string>
+					<key>locale</key>
+					<string>en_US</string>
+				</dict>
+			</array>
+			<key>productID</key>
+			<string>yves.vogl.pixelcurator.quality.b</string>
+			<key>referenceName</key>
+			<string>Quality B</string>
+			<key>type</key>
+			<string>NonConsumable</string>
+		</dict>
+	</array>
+	<key>settings</key>
+	<dict>
+		<key>StoreKitConfigVersion</key>
+		<string>2</string>
+	</dict>
+	<key>version</key>
+	<dict>
+		<key>major</key>
+		<integer>1</integer>
+		<key>minor</key>
+		<integer>0</integer>
+	</dict>
+</dict>
+</plist>

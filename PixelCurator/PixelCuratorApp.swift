@@ -26,6 +26,23 @@ struct PixelCuratorApp: App {
     /// Guards against concurrent variant-switch calls.
     @State private var isSwitchingVariant = false
 
+    /// The single SwiftData container shared by the SwiftUI scene and every ML
+    /// service (indexer, similarity search, sorting). Using one container —
+    /// rather than one per service — is essential: multiple independent
+    /// `ModelContainer`s over the same on-disk store run separate store
+    /// coordinators, and fetching rows written through one coordinator from
+    /// another traps inside SwiftData on the main thread (EXC_BREAKPOINT). It
+    /// also collapses four store openings at launch into one.
+    private let modelContainer: ModelContainer
+
+    init() {
+        do {
+            modelContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
+        } catch {
+            fatalError("PixelCurator: failed to create the shared ModelContainer: \(error)")
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -43,7 +60,7 @@ struct PixelCuratorApp: App {
         #if os(macOS)
         .defaultSize(width: 900, height: 700)
         #endif
-        .modelContainer(for: [PhotoEmbedding.self, AlbumCorrection.self])
+        .modelContainer(modelContainer)
     }
 
     // MARK: - Boot
@@ -64,34 +81,33 @@ struct PixelCuratorApp: App {
             let modelURL = try await ModelStore.compiledModelURL(for: variant)
             let embedder = try await Embedder(modelURL: modelURL)
 
-            let container = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
+            // All services share the app's single ModelContainer (see the
+            // `modelContainer` declaration for why per-service containers trap).
+            let context = modelContainer.mainContext
+
             let newIndexer = EmbeddingIndexer(
-                context: container.mainContext,
+                context: context,
                 embedder: embedder,
                 modelStore: ModelStore(),
                 variant: variant
             )
             self.indexer = newIndexer
 
-            let searchContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
             self.similaritySearch = SimilaritySearch(
                 embedder: embedder,
-                context: searchContainer.mainContext,
+                context: context,
                 library: library,
                 variant: variant
             )
             self.activeVariant = variant
 
-            // Build SortingCoordinator with its own ModelContext, following the
-            // same per-service container pattern used by the indexer and search.
-            let sortingContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
             self.sortingCoordinator = SortingCoordinator(
-                store: EmbeddingStore(context: sortingContainer.mainContext),
+                store: EmbeddingStore(context: context),
                 suggester: AlbumSuggester(),
                 albumManager: albums,
                 photoController: library,
                 modelID: variant.modelID,
-                correctionStore: CorrectionStore(context: sortingContainer.mainContext)
+                correctionStore: CorrectionStore(context: context)
             )
         } catch {
             print("PixelCuratorApp: failed to boot indexer for \(variant.displayName): \(error)")

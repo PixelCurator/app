@@ -186,6 +186,43 @@ final class WalkthroughUITests: XCTestCase {
                 dismissSheet(app)
             }
         }
+
+        // MARK: - Step 8: Soft check — Batch select mode in Sorting Inbox
+
+        // Re-open the Sorting Inbox to test the Select button.
+        let sortingInboxButton2 = app.buttons["Sort Inbox"]
+        if sortingInboxButton2.waitForExistence(timeout: 5) {
+            sortingInboxButton2.tap()
+        } else {
+            let byID2 = app.buttons["toolbar-sorting-inbox"]
+            if byID2.waitForExistence(timeout: 3) {
+                byID2.tap()
+            }
+        }
+        _ = app.navigationBars["Sorting Inbox"].waitForExistence(timeout: 8)
+
+        // Tap Select if it exists (only shown when queue is non-empty).
+        let selectToggle = app.buttons["inbox-select-toggle"]
+        if selectToggle.waitForExistence(timeout: 5) {
+            selectToggle.tap()
+
+            // Soft-wait for the selection grid.
+            let gridFound = app.otherElements["inbox-select-grid"].waitForExistence(timeout: 5)
+                || app.scrollViews.firstMatch.waitForExistence(timeout: 3)
+
+            if gridFound {
+                capture(screenshot: app.screenshot(), name: "08-batch-select")
+            }
+
+            // Tap Cancel to exit select mode without mutating the photo library.
+            let cancelButton = app.buttons["Cancel"]
+            if cancelButton.waitForExistence(timeout: 3) {
+                cancelButton.tap()
+            }
+        }
+
+        // Dismiss the Sorting Inbox sheet.
+        dismissSheet(app)
     }
 
     // MARK: - Helpers

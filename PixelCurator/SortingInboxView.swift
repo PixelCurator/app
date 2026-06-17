@@ -30,6 +30,12 @@ struct SortingInboxView: View {
     @State private var heroImage: PlatformImage?
     @State private var lastLoadedID: String?
 
+    // MARK: - Batch select state
+
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<String> = []
+    @State private var showBatchAssignPicker = false
+
     // MARK: - Body
 
     var body: some View {
@@ -41,6 +47,8 @@ struct SortingInboxView: View {
                     } else {
                         inboxZeroView
                     }
+                } else if isSelecting {
+                    selectionGrid
                 } else {
                     reviewCard
                 }
@@ -52,22 +60,41 @@ struct SortingInboxView: View {
             .accessibilityIdentifier("sorting-inbox-view")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    if isSelecting {
+                        Button("Cancel") {
+                            isSelecting = false
+                            selectedIDs.removeAll()
+                        }
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
                 }
                 ToolbarItemGroup(placement: .automatic) {
-                    Button {
-                        Task { await coordinator.decisionLog.undo() }
-                    } label: {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(!coordinator.decisionLog.canUndo)
+                    if isSelecting {
+                        // No undo/redo during select mode
+                        EmptyView()
+                    } else {
+                        Button {
+                            Task { await coordinator.decisionLog.undo() }
+                        } label: {
+                            Label("Undo", systemImage: "arrow.uturn.backward")
+                        }
+                        .disabled(!coordinator.decisionLog.canUndo)
 
-                    Button {
-                        Task { await coordinator.decisionLog.redo() }
-                    } label: {
-                        Label("Redo", systemImage: "arrow.uturn.forward")
+                        Button {
+                            Task { await coordinator.decisionLog.redo() }
+                        } label: {
+                            Label("Redo", systemImage: "arrow.uturn.forward")
+                        }
+                        .disabled(!coordinator.decisionLog.canRedo)
+
+                        if !coordinator.isExhausted {
+                            Button("Select") {
+                                isSelecting = true
+                            }
+                            .accessibilityIdentifier("inbox-select-toggle")
+                        }
                     }
-                    .disabled(!coordinator.decisionLog.canRedo)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -75,10 +102,99 @@ struct SortingInboxView: View {
                     toastBanner(toast)
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                if isSelecting {
+                    batchAssignBar
+                }
+            }
         }
         .task {
             coordinator.buildQueue()
         }
+    }
+
+    // MARK: - Selection grid
+
+    private let selectionColumns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
+
+    @ViewBuilder
+    private var selectionGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: selectionColumns, spacing: 2) {
+                ForEach(coordinator.queue, id: \.localIdentifier) { asset in
+                    SelectionThumbnailCell(
+                        asset: asset,
+                        isSelected: selectedIDs.contains(asset.localIdentifier)
+                    )
+                    .aspectRatio(1, contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if selectedIDs.contains(asset.localIdentifier) {
+                            selectedIDs.remove(asset.localIdentifier)
+                        } else {
+                            selectedIDs.insert(asset.localIdentifier)
+                        }
+                    }
+                }
+            }
+            .padding(2)
+        }
+        .accessibilityIdentifier("inbox-select-grid")
+        // Batch assign confirmation dialog
+        .confirmationDialog(
+            "Assign to Album",
+            isPresented: $showBatchAssignPicker,
+            titleVisibility: .visible
+        ) {
+            ForEach(coordinator.albumManager.albums.prefix(12)) { album in
+                Button(album.title) {
+                    let assets = coordinator.queue.filter { selectedIDs.contains($0.localIdentifier) }
+                    let chosenTitle = album.title
+                    Task {
+                        let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
+                        selectedIDs.removeAll()
+                        isSelecting = false
+                        await showToast("Added \(n) to \(chosenTitle)")
+                    }
+                }
+            }
+            Button("➕ New album…") {
+                let assets = coordinator.queue.filter { selectedIDs.contains($0.localIdentifier) }
+                let chosenTitle = "PixelCurator"
+                Task {
+                    let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
+                    selectedIDs.removeAll()
+                    isSelecting = false
+                    await showToast("Added \(n) to \(chosenTitle)")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // MARK: - Batch assign bar
+
+    @ViewBuilder
+    private var batchAssignBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                showBatchAssignPicker = true
+            } label: {
+                Text("Assign \(selectedIDs.count) to…")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(selectedIDs.isEmpty)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .accessibilityIdentifier("batch-assign-bar")
+        }
+        .background(.bar)
     }
 
     // MARK: - Review card
@@ -313,6 +429,64 @@ struct SortingInboxView: View {
             .background(.thinMaterial, in: Capsule())
             .padding(.bottom, 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+// MARK: - SelectionThumbnailCell
+
+/// Lazy-loading thumbnail cell for the batch selection grid.
+/// Mirrors AlbumThumbnailCell with an added selection overlay.
+private struct SelectionThumbnailCell: View {
+    @Environment(PhotoController.self) private var library
+    let asset: PHAsset
+    let isSelected: Bool
+
+    @State private var image: PlatformImage?
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    if let image {
+                        Image(platformImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Rectangle().fill(.gray.opacity(0.15))
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .overlay {
+                    if isSelected {
+                        Rectangle()
+                            .fill(.blue.opacity(0.25))
+                    }
+                }
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(.blue, lineWidth: 3)
+                    }
+                }
+                .task(id: asset.localIdentifier) {
+                    let scale = 2.0
+                    let target = CGSize(
+                        width: geo.size.width * scale,
+                        height: geo.size.height * scale
+                    )
+                    image = await library.thumbnail(for: asset, size: target)
+                }
+
+                // Checkmark badge
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white, .blue)
+                        .padding(6)
+                        .shadow(radius: 2)
+                }
+            }
+        }
     }
 }
 

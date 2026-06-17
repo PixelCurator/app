@@ -135,6 +135,7 @@ final class AlbumSuggester {
         modelID: String,
         store: EmbeddingStore,
         albumManager: AlbumManager,
+        corrections: CorrectionStore? = nil,
         k: Int = 15
     ) -> [AlbumSuggestion] {
         // Step 1: resolve query embedding.
@@ -154,6 +155,18 @@ final class AlbumSuggester {
                     continue
                 }
                 labeledPoints.append((album: album.title, vector: memberEmbedding.floats))
+            }
+        }
+
+        // Step 2b: fold in user corrections as additional labeled points (equal
+        // weight). A correction "asset X → album A" means X is an example of A;
+        // this is the lightweight on-device "retrain" — past overrides nudge
+        // future suggestions toward what the user actually chose.
+        if let corrections {
+            for correction in corrections.corrections(modelID: modelID) {
+                guard correction.assetID != queryAssetID else { continue }
+                guard let memberEmbedding = store.embedding(assetID: correction.assetID, modelID: modelID) else { continue }
+                labeledPoints.append((album: correction.albumName, vector: memberEmbedding.floats))
             }
         }
 

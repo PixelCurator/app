@@ -30,6 +30,7 @@ final class SortingCoordinator {
     private let photoController: PhotoController
     let modelID: String
     let decisionLog: DecisionLog
+    private let correctionStore: CorrectionStore?
 
     // MARK: - State
 
@@ -74,7 +75,8 @@ final class SortingCoordinator {
         albumManager: AlbumManager,
         photoController: PhotoController,
         modelID: String = CLIPVariant.bundledDefault.modelID,
-        decisionLog: DecisionLog? = nil
+        decisionLog: DecisionLog? = nil,
+        correctionStore: CorrectionStore? = nil
     ) {
         self.store = store
         self.suggester = suggester
@@ -83,6 +85,7 @@ final class SortingCoordinator {
         self.modelID = modelID
         // If no DecisionLog is provided, create one backed by the shared albumManager.
         self.decisionLog = decisionLog ?? DecisionLog(operations: albumManager)
+        self.correctionStore = correctionStore
     }
 
     // MARK: - Queue building
@@ -146,6 +149,7 @@ final class SortingCoordinator {
             sortedCount += 1
             lastAssignError = nil
             decisionLog.record(asset: asset, albumName: suggestion.albumTitle)
+            recordCorrectionIfNeeded(asset: asset, albumName: suggestion.albumTitle)
         } else {
             lastAssignError = albumManager.lastError
         }
@@ -166,6 +170,7 @@ final class SortingCoordinator {
             sortedCount += 1
             lastAssignError = nil
             decisionLog.record(asset: asset, albumName: name)
+            recordCorrectionIfNeeded(asset: asset, albumName: name)
         } else {
             lastAssignError = albumManager.lastError
         }
@@ -178,6 +183,16 @@ final class SortingCoordinator {
     }
 
     // MARK: - Private
+
+    /// Records a correction when the chosen album differs from the top suggestion
+    /// (or there was no suggestion). Corrections feed back into future rankings
+    /// via `AlbumSuggester`.
+    private func recordCorrectionIfNeeded(asset: PHAsset, albumName: String) {
+        guard let correctionStore else { return }
+        if albumName != currentSuggestions.first?.albumTitle {
+            correctionStore.record(assetID: asset.localIdentifier, albumName: albumName, modelID: modelID)
+        }
+    }
 
     private func advance() {
         currentIndex += 1
@@ -196,7 +211,8 @@ final class SortingCoordinator {
             for: asset.localIdentifier,
             modelID: modelID,
             store: store,
-            albumManager: albumManager
+            albumManager: albumManager,
+            corrections: correctionStore
         )
     }
 }

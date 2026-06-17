@@ -1,0 +1,29 @@
+# Generates a Software Bill of Materials (SBOM) for the repository on every
+# push to main, uploaded as a workflow artifact. Satisfies the OpenSSF
+# Scorecard SBOM check and gives a record of what the build contains.
+name: SBOM
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: pixelcurator.spdx.json

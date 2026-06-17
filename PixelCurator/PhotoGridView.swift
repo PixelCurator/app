@@ -26,6 +26,7 @@ struct PhotoGridView: View {
     @Environment(\.switchVariant) private var switchVariant
 
     @Environment(\.sortingCoordinator) private var sortingCoordinator
+    @Environment(\.decisionLog) private var decisionLog
 
     @State private var selectedAsset: PHAsset?
     @State private var showAssignDialog = false
@@ -81,6 +82,19 @@ struct PhotoGridView: View {
                         Label("Sort Inbox", systemImage: "tray.full")
                     }
                     .disabled(sortingCoordinator == nil)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        Task {
+                            await decisionLog?.undo()
+                            if let name = decisionLog?.lastUndoneAlbumName {
+                                await showToast("Removed from \(name)")
+                            }
+                        }
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!(decisionLog?.canUndo ?? false))
                 }
             }
             .overlay(alignment: .bottom) {
@@ -162,6 +176,9 @@ struct PhotoGridView: View {
         guard let asset = selectedAsset else { return }
         Task {
             let ok = await albums.assign(asset, toAlbumNamed: albumName)
+            if ok {
+                decisionLog?.record(asset: asset, albumName: albumName)
+            }
             await showToast(ok ? "Added to \(albumName)" : (albums.lastError ?? "Failed"))
         }
     }

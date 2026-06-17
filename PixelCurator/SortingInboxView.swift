@@ -16,6 +16,7 @@ struct SortingInboxView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(PhotoController.self) private var library
+    @Environment(\.embeddingIndexer) private var embeddingIndexer
 
     /// The coordinator owns the session state. Passed as a direct reference
     /// because SortingCoordinator is @Observable — SwiftUI tracks changes
@@ -35,7 +36,11 @@ struct SortingInboxView: View {
         NavigationStack {
             Group {
                 if coordinator.isExhausted {
-                    inboxZeroView
+                    if let indexer = embeddingIndexer, indexer.isIndexing {
+                        indexingEmptyStateView(indexer: indexer)
+                    } else {
+                        inboxZeroView
+                    }
                 } else {
                     reviewCard
                 }
@@ -230,6 +235,29 @@ struct SortingInboxView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
         }
+    }
+
+    // MARK: - Indexing empty state
+
+    /// Shown when the queue is empty but the indexer is still running.
+    /// Distinguishes "nothing to sort yet — come back soon" from true inbox zero.
+    @ViewBuilder
+    private func indexingEmptyStateView(indexer: EmbeddingIndexer) -> some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Indexing \(indexer.indexed)/\(indexer.total)…")
+                .font(.title2.bold())
+            Text("Suggestions appear as photos are indexed.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            Button("Done") { dismiss() }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+        }
+        .padding()
     }
 
     // MARK: - Inbox zero

@@ -62,20 +62,17 @@ struct CorrectionStore {
 
     /// Returns the correction for `(assetID, modelID)`, or nil.
     func correction(assetID: String, modelID: String) -> AlbumCorrection? {
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26; revisit when fixed.
         let compositeKey = "\(assetID)|\(modelID)"
-        var descriptor = FetchDescriptor<AlbumCorrection>(
-            predicate: #Predicate { $0.key == compositeKey }
-        )
-        descriptor.fetchLimit = 1
-        return try? context.fetch(descriptor).first
+        let all = (try? context.fetch(FetchDescriptor<AlbumCorrection>())) ?? []
+        return all.first { $0.key == compositeKey }
     }
 
     /// All corrections recorded for `modelID`.
     func corrections(modelID: String) -> [AlbumCorrection] {
-        let descriptor = FetchDescriptor<AlbumCorrection>(
-            predicate: #Predicate { $0.modelID == modelID }
-        )
-        return (try? context.fetch(descriptor)) ?? []
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26; revisit when fixed.
+        let all = (try? context.fetch(FetchDescriptor<AlbumCorrection>())) ?? []
+        return all.filter { $0.modelID == modelID }
     }
 
     /// Removes all corrections for `modelID` (e.g. when re-indexing a variant).

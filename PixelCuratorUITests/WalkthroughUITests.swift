@@ -123,7 +123,7 @@ final class WalkthroughUITests: XCTestCase {
 
         // Open a thumbnail detail by tapping it (shows confirmationDialog).
         let thumb = app.images.firstMatch
-        if thumb.waitForExistence(timeout: 5) {
+        if thumb.waitForExistence(timeout: 5) && thumb.isHittable {
             thumb.tap()
             // Dismiss the confirmation dialog if it appeared.
             let cancel = app.buttons["Cancel"]
@@ -158,13 +158,18 @@ final class WalkthroughUITests: XCTestCase {
     }
 
     /// Swipe down to dismiss a modal sheet, then wait for the main grid to be visible.
+    ///
+    /// On iOS the main "PixelCurator" navigation bar can still report `exists`
+    /// while a sheet is presented on top of it, so we cannot key the swipe off
+    /// the main bar's absence. Instead we swipe whenever one of the known sheet
+    /// navigation bars is present, which reliably clears the sheet before the
+    /// next step interacts with the grid underneath.
     private func dismissSheet(_ app: XCUIApplication) {
-        // If a navigation bar other than "PixelCurator" is visible, swipe down.
-        let mainNav = app.navigationBars["PixelCurator"]
-        if !mainNav.exists {
+        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality"]
+        if sheetNavs.contains(where: { app.navigationBars[$0].exists }) {
             app.swipeDown(velocity: .fast)
-            _ = mainNav.waitForExistence(timeout: 5)
         }
+        _ = app.navigationBars["PixelCurator"].waitForExistence(timeout: 5)
     }
 
     /// Captures the XCUIApplication element tree as a plain-text attachment.

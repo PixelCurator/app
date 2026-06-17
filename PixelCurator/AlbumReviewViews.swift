@@ -122,8 +122,14 @@ struct AlbumDetailView: View {
                 ForEach(albumManager.albums.filter { $0.id != album.id }) { target in
                     Button(target.title) {
                         Task {
-                            _ = await albumManager.assign(asset, toAlbumNamed: target.title)
-                            _ = await albumManager.remove(asset, fromAlbumNamed: album.title)
+                            // Only drop the asset from the current album if it was
+                            // actually added to the target — otherwise a failed
+                            // assign (e.g. PhotoKit error) would leave the photo in
+                            // no album at all.
+                            let added = await albumManager.assign(asset, toAlbumNamed: target.title)
+                            if added {
+                                _ = await albumManager.remove(asset, fromAlbumNamed: album.title)
+                            }
                             await loadAssets()
                         }
                     }

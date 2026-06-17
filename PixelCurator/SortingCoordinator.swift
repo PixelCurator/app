@@ -150,10 +150,12 @@ final class SortingCoordinator {
             lastAssignError = nil
             decisionLog.record(asset: asset, albumName: suggestion.albumTitle)
             recordCorrectionIfNeeded(asset: asset, albumName: suggestion.albumTitle)
+            advance()
         } else {
+            // Stay on the current photo so a failed assign can be retried
+            // instead of silently skipping the photo out of the session.
             lastAssignError = albumManager.lastError
         }
-        advance()
     }
 
     /// Assigns the current photo to an explicitly chosen album name (the
@@ -171,10 +173,12 @@ final class SortingCoordinator {
             lastAssignError = nil
             decisionLog.record(asset: asset, albumName: name)
             recordCorrectionIfNeeded(asset: asset, albumName: name)
+            advance()
         } else {
+            // Stay on the current photo so a failed assign can be retried
+            // instead of silently skipping the photo out of the session.
             lastAssignError = albumManager.lastError
         }
-        advance()
     }
 
     /// Skips the current photo without assigning it to any album.

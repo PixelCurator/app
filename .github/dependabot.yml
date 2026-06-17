@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Keep GitHub Actions used in workflows (e.g. the OpenSSF Scorecard workflow)
+  # up to date. New Swift Package Manager dependencies should add a "swift"
+  # ecosystem block here when a Package.swift is introduced.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

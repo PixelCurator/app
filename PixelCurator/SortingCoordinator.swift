@@ -29,6 +29,7 @@ final class SortingCoordinator {
     let albumManager: AlbumManager
     private let photoController: PhotoController
     let modelID: String
+    let decisionLog: DecisionLog
 
     // MARK: - State
 
@@ -72,13 +73,16 @@ final class SortingCoordinator {
         suggester: AlbumSuggester,
         albumManager: AlbumManager,
         photoController: PhotoController,
-        modelID: String = CLIPVariant.bundledDefault.modelID
+        modelID: String = CLIPVariant.bundledDefault.modelID,
+        decisionLog: DecisionLog? = nil
     ) {
         self.store = store
         self.suggester = suggester
         self.albumManager = albumManager
         self.photoController = photoController
         self.modelID = modelID
+        // If no DecisionLog is provided, create one backed by the shared albumManager.
+        self.decisionLog = decisionLog ?? DecisionLog(operations: albumManager)
     }
 
     // MARK: - Queue building
@@ -131,12 +135,17 @@ final class SortingCoordinator {
 
     /// Accepts a suggestion: assigns the current photo to the suggested album,
     /// then advances to the next photo.
+    ///
+    /// - Parameter suggestion: The top-ranked suggestion accepted by the user.
+    ///   `isSuggestionAccept` is `true` here, which M3-D can use to distinguish
+    ///   corrections (user picks a *non-top* album) from confirmations.
     func accept(_ suggestion: AlbumSuggestion) async {
         guard let asset = current else { return }
         let ok = await albumManager.assign(asset, toAlbumNamed: suggestion.albumTitle)
         if ok {
             sortedCount += 1
             lastAssignError = nil
+            decisionLog.record(asset: asset, albumName: suggestion.albumTitle)
         } else {
             lastAssignError = albumManager.lastError
         }
@@ -145,12 +154,18 @@ final class SortingCoordinator {
 
     /// Assigns the current photo to an explicitly chosen album name (the
     /// "pick other" path), then advances.
+    ///
+    /// - Note for M3-D: this path is invoked when the user overrides suggestions
+    ///   or picks from the full album list. Comparing `name` against
+    ///   `currentSuggestions.first?.albumTitle` before `advance()` would let
+    ///   M3-D distinguish a correction from a confirmation.
     func assignTo(albumNamed name: String) async {
         guard let asset = current else { return }
         let ok = await albumManager.assign(asset, toAlbumNamed: name)
         if ok {
             sortedCount += 1
             lastAssignError = nil
+            decisionLog.record(asset: asset, albumName: name)
         } else {
             lastAssignError = albumManager.lastError
         }

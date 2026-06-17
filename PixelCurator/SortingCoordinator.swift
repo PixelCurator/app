@@ -186,6 +186,46 @@ final class SortingCoordinator {
         advance()
     }
 
+    // MARK: - Batch assign
+
+    /// Assigns several queued photos to one album in a single action.
+    ///
+    /// Each successful assignment is recorded in the decision log (so Undo works
+    /// per photo) and as a correction (the user explicitly chose the album — a
+    /// label for future suggestions). Assigned photos are removed from the queue
+    /// in place, preserving the session's `sortedCount` and the current position
+    /// (unlike a full `buildQueue()`, which resets the counters).
+    ///
+    /// - Returns: the number of photos successfully assigned.
+    @discardableResult
+    func batchAssign(_ assets: [PHAsset], toAlbumNamed name: String) async -> Int {
+        var assignedIDs = Set<String>()
+        for asset in assets {
+            let ok = await albumManager.assign(asset, toAlbumNamed: name)
+            if ok {
+                assignedIDs.insert(asset.localIdentifier)
+                decisionLog.record(asset: asset, albumName: name)
+                correctionStore?.record(assetID: asset.localIdentifier, albumName: name, modelID: modelID)
+            } else {
+                lastAssignError = albumManager.lastError
+            }
+        }
+        guard !assignedIDs.isEmpty else { return 0 }
+
+        // Remove the assigned photos from the queue in place. Adjust the current
+        // index by however many removed photos sat before it so the user stays
+        // on (or near) the same spot.
+        let removedBeforeCurrent = queue[..<min(currentIndex, queue.count)]
+            .filter { assignedIDs.contains($0.localIdentifier) }
+            .count
+        queue.removeAll { assignedIDs.contains($0.localIdentifier) }
+        currentIndex = max(0, currentIndex - removedBeforeCurrent)
+        if currentIndex >= queue.count { isSorting = false }
+        sortedCount += assignedIDs.count
+        recomputeSuggestions()
+        return assignedIDs.count
+    }
+
     // MARK: - Cheap count for discoverability
 
     /// Cheap count of photos eligible for sorting (embedded AND not in any

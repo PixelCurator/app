@@ -48,6 +48,21 @@ struct SortingInboxView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItemGroup(placement: .automatic) {
+                    Button {
+                        Task { await coordinator.decisionLog.undo() }
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!coordinator.decisionLog.canUndo)
+
+                    Button {
+                        Task { await coordinator.decisionLog.redo() }
+                    } label: {
+                        Label("Redo", systemImage: "arrow.uturn.forward")
+                    }
+                    .disabled(!coordinator.decisionLog.canRedo)
+                }
             }
             .overlay(alignment: .bottom) {
                 if let toast {
@@ -111,6 +126,18 @@ struct SortingInboxView: View {
         .onChange(of: coordinator.lastAssignError) { _, error in
             if let error {
                 Task { await showToast(error) }
+            }
+        }
+        // Undo feedback
+        .onChange(of: coordinator.decisionLog.lastUndoneAlbumName) { _, name in
+            if let name {
+                Task { await showToast("Removed from \(name)") }
+            }
+        }
+        // Redo feedback
+        .onChange(of: coordinator.decisionLog.lastRedoneAlbumName) { _, name in
+            if let name {
+                Task { await showToast("Re-added to \(name)") }
             }
         }
         // Load hero image whenever current changes

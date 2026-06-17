@@ -6,7 +6,7 @@ import SwiftUI
 /// it appear in the real Photos.app, which is the core "commit" operation.
 @MainActor
 @Observable
-final class AlbumManager {
+final class AlbumManager: AlbumOperations {
 
     struct Album: Identifiable, Hashable {
         let id: String          // localIdentifier
@@ -33,6 +33,25 @@ final class AlbumManager {
         albums = collected.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
+    /// Returns the `PHAsset.localIdentifier`s of every asset in the album
+    /// identified by `albumLocalIdentifier`.
+    ///
+    /// Uses a direct `PHAssetCollection` fetch by identifier so that no prior
+    /// `loadAlbums()` call is required. Returns an empty array if the collection
+    /// cannot be found or the app lacks photo-library access.
+    func memberAssetIDs(of albumLocalIdentifier: String) -> [String] {
+        let result = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [albumLocalIdentifier], options: nil
+        )
+        guard let collection = result.firstObject else { return [] }
+        var ids: [String] = []
+        let assets = PHAsset.fetchAssets(in: collection, options: nil)
+        assets.enumerateObjects { asset, _, _ in
+            ids.append(asset.localIdentifier)
+        }
+        return ids
+    }
+
     // MARK: - Write
 
     /// Adds an asset to a named album, creating the album if it does not exist.
@@ -42,6 +61,30 @@ final class AlbumManager {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
+            }
+            loadAlbums()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Removes an asset from a named album. Does not delete the album itself.
+    /// Returns `false` (and sets `lastError`) if the album does not exist or the
+    /// Photos change request fails.
+    func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localizedTitle = %@", name)
+        let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        guard let collection = existing.firstObject else {
+            lastError = "Album \"\(name)\" not found."
+            return false
+        }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
+                request.removeAssets([asset] as NSArray)
             }
             loadAlbums()
             return true

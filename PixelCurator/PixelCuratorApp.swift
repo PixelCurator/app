@@ -9,6 +9,11 @@ struct PixelCuratorApp: App {
     @State private var similaritySearch: SimilaritySearch?
     @State private var sortingCoordinator: SortingCoordinator?
 
+    /// Shared DecisionLog for the grid's tap-to-assign undo flow.
+    /// SortingCoordinator owns its own internal log (separate history); a future
+    /// milestone can unify both logs into this one.
+    @State private var sharedDecisionLog: DecisionLog?
+
     /// The active CLIP variant. Changing this triggers variant-switch orchestration.
     @State private var activeVariant: CLIPVariant = .bundledDefault
 
@@ -32,6 +37,7 @@ struct PixelCuratorApp: App {
                 .environment(\.entitlementProvider, entitlements)
                 .environment(\.switchVariant, switchVariant(_:))
                 .environment(\.sortingCoordinator, sortingCoordinator)
+                .environment(\.decisionLog, sharedDecisionLog)
                 .task { await bootIndexer(variant: .bundledDefault) }
         }
         #if os(macOS)
@@ -47,6 +53,12 @@ struct PixelCuratorApp: App {
         guard !isSwitchingVariant else { return }
         isSwitchingVariant = true
         defer { isSwitchingVariant = false }
+
+        // Create the shared DecisionLog once (on first boot). Variant switches
+        // don't need a fresh log — the same albums instance backs undo operations.
+        if sharedDecisionLog == nil {
+            sharedDecisionLog = DecisionLog(operations: albums)
+        }
 
         do {
             let modelURL = try await ModelStore.compiledModelURL(for: variant)

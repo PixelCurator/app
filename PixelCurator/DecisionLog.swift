@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import SwiftUI
 
 // MARK: - AlbumOperations (testable seam)
 
@@ -159,5 +160,23 @@ final class DecisionLog {
             stack.pushRedo(decision)
             lastRedoneAlbumName = nil
         }
+    }
+}
+
+// MARK: - Environment key
+
+/// Shared `DecisionLog` injected from the root scene so that `PhotoGridView`
+/// and any other non-coordinator view can record assignments for undo.
+///
+/// Usage: inject via `.environment(\.decisionLog, myLog)` and consume via
+/// `@Environment(\.decisionLog)`.
+private struct DecisionLogKey: EnvironmentKey {
+    static let defaultValue: DecisionLog? = nil
+}
+
+extension EnvironmentValues {
+    var decisionLog: DecisionLog? {
+        get { self[DecisionLogKey.self] }
+        set { self[DecisionLogKey.self] = newValue }
     }
 }

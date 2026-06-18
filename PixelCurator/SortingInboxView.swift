@@ -497,7 +497,11 @@ private struct SuggestionChip: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.albumTitle)
                         .font(.body.weight(.medium))
-                    Text("\(Int(suggestion.score * 100))% · \(suggestion.supportingCount) similar")
+                    // Percent is `verbatim` (locale-neutral, avoids a bare `%`
+                    // in a localized format key); only the count phrase is
+                    // localized ("%lld similar" → "%lld ähnlich").
+                    (Text(verbatim: "\(Int(suggestion.score * 100))% · ")
+                        + Text("\(suggestion.supportingCount) similar"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

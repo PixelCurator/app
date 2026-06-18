@@ -15,7 +15,10 @@ struct RootTabView: View {
         case photos, sort, albums
         var id: Self { self }
 
-        var title: String {
+        /// `LocalizedStringKey` (not `String`) so SwiftUI localizes these tab /
+        /// sidebar labels via the string catalog — a plain `String` variable
+        /// would bypass localization.
+        var title: LocalizedStringKey {
             switch self {
             case .photos: "Photos"
             case .sort: "Sort"

@@ -3,11 +3,14 @@ import XCTest
 /// M2/M3 end-to-end walkthrough test.
 ///
 /// Drives the live simulator through the main user flows:
-///   1. Photo grid appears (ONLY hard assertion)
-///   2. Find Similar sheet
-///   3. Sorting Inbox sheet
-///   4. Variant Settings sheet
-///   5. Undo button (best-effort)
+///   1. Photo grid appears (ONLY hard assertion on the tab bar)
+///   2. Find Similar sheet (Photos tab)
+///   3. Variant Settings sheet (Photos tab)
+///   4. Tap thumbnail → "Add to album" sheet (HARD assertion, Photos tab)
+///   5. Undo button (Photos tab, best-effort)
+///   6. Inbox CTA banner (soft check, Photos tab)
+///   7. Albums tab
+///   8. Sort tab + batch-select mode
 ///
 /// Screenshots are captured as XCTAttachment (keepAlways) at each step so they
 /// end up in the xcresult bundle regardless of pass/fail.
@@ -44,13 +47,19 @@ final class WalkthroughUITests: XCTestCase {
                       "Photo grid did not appear after granting access")
 
         // Give thumbnails a moment to render.
-        _ = app.images.firstMatch.waitForExistence(timeout: 10)
+        _ = app.scrollViews.images.firstMatch.waitForExistence(timeout: 10)
 
         capture(screenshot: app.screenshot(), name: "01-grid")
 
-        // MARK: - Step 2: Long-press first thumbnail → Find Similar
+        // MARK: - Step 2: Long-press first thumbnail → Find Similar (Photos tab)
 
-        let firstImage = app.images.firstMatch
+        // Ensure we are on the Photos tab.
+        let photosTab = app.tabBars.buttons["Photos"]
+        if photosTab.waitForExistence(timeout: 5) {
+            photosTab.tap()
+        }
+
+        let firstImage = app.scrollViews.images.firstMatch
         if firstImage.waitForExistence(timeout: 5) {
             firstImage.press(forDuration: 1.2)
 
@@ -72,33 +81,15 @@ final class WalkthroughUITests: XCTestCase {
 
         capture(screenshot: app.screenshot(), name: "02-find-similar")
 
-        // MARK: - Step 3: Dismiss sheet, open Sorting Inbox
-
-        // Dismiss any open sheet by swiping down.
+        // Dismiss any open sheet (find-similar) before proceeding.
         dismissSheet(app)
 
-        // Tap the Sorting Inbox toolbar button.
-        let sortingInboxButton = app.buttons["Sort Inbox"]
-        if sortingInboxButton.waitForExistence(timeout: 5) {
-            sortingInboxButton.tap()
-            let inboxNav = app.navigationBars["Sorting Inbox"]
-            _ = inboxNav.waitForExistence(timeout: 8)
-        } else {
-            // Fallback: try by accessibility identifier.
-            let byID = app.buttons["toolbar-sorting-inbox"]
-            if byID.waitForExistence(timeout: 3) {
-                byID.tap()
-                _ = app.navigationBars["Sorting Inbox"].waitForExistence(timeout: 8)
-            } else {
-                attachUITree(app, label: "debug-no-sorting-inbox-button")
-            }
+        // MARK: - Step 3: Variant Settings sheet (Photos tab)
+
+        // Ensure Photos tab is active after sheet dismiss.
+        if photosTab.waitForExistence(timeout: 5) {
+            photosTab.tap()
         }
-
-        capture(screenshot: app.screenshot(), name: "03-sorting-inbox")
-
-        // MARK: - Step 4: Dismiss sheet, open Variant Settings
-
-        dismissSheet(app)
 
         let variantButton = app.buttons["Quality"]
         if variantButton.waitForExistence(timeout: 5) {
@@ -117,17 +108,23 @@ final class WalkthroughUITests: XCTestCase {
 
         capture(screenshot: app.screenshot(), name: "04-variant-settings")
 
-        // MARK: - Step 5: Dismiss, tap thumbnail → assign suggestion sheet, tap Undo
-
+        // Dismiss variant settings sheet.
         dismissSheet(app)
 
-        // Open a thumbnail by tapping it — now shows the ranked-suggestion sheet.
-        let thumb = app.images.firstMatch
+        // MARK: - Step 4: Tap thumbnail → assign suggestion sheet (HARD assertion, Photos tab)
+
+        // Ensure Photos tab is active.
+        if photosTab.waitForExistence(timeout: 5) {
+            photosTab.tap()
+        }
+
+        let thumb = app.scrollViews.images.firstMatch
         if thumb.waitForExistence(timeout: 5) && thumb.isHittable {
             thumb.tap()
             // Hard assertion: the new assign-suggestion sheet must appear.
             XCTAssertTrue(app.navigationBars["Add to album"].waitForExistence(timeout: 8),
                           "Assign suggestion sheet did not appear")
+            capture(screenshot: app.screenshot(), name: "05-add-to-album")
             // Dismiss via Cancel button if present, else swipe down.
             let cancel = app.buttons["Cancel"]
             if cancel.waitForExistence(timeout: 3) {
@@ -137,7 +134,13 @@ final class WalkthroughUITests: XCTestCase {
             }
         }
 
-        // Tap the Undo toolbar button (may be disabled — tap anyway for coverage).
+        // MARK: - Step 5: Undo button (Photos tab, best-effort)
+
+        // Ensure Photos tab is active.
+        if photosTab.waitForExistence(timeout: 3) {
+            photosTab.tap()
+        }
+
         let undoButton = app.buttons["Undo"]
         if undoButton.waitForExistence(timeout: 5) {
             if undoButton.isEnabled {
@@ -152,11 +155,14 @@ final class WalkthroughUITests: XCTestCase {
 
         capture(screenshot: app.screenshot(), name: "05-undo")
 
-        // MARK: - Step 6: Soft check — CTA banner (indexing may not be done yet)
+        // MARK: - Step 6: Soft check — CTA banner (Photos tab, indexing may not be done yet)
 
-        // Wait up to ~15s for the inbox CTA banner to appear. This is a soft
-        // check: indexing time varies across machines, so we only capture a
-        // screenshot if found and never hard-assert.
+        // Ensure Photos tab is active.
+        if photosTab.waitForExistence(timeout: 3) {
+            photosTab.tap()
+        }
+
+        // Wait up to ~15s for the inbox CTA banner to appear. Soft check only.
         let ctaBanner = app.otherElements["inbox-cta"].waitForExistence(timeout: 15)
             ? app.otherElements["inbox-cta"]
             : (app.buttons["inbox-cta"].waitForExistence(timeout: 1) ? app.buttons["inbox-cta"] : nil)
@@ -164,11 +170,11 @@ final class WalkthroughUITests: XCTestCase {
             capture(screenshot: app.screenshot(), name: "06-inbox-cta")
         }
 
-        // MARK: - Step 7: Soft check — Albums sheet
+        // MARK: - Step 7: Albums tab
 
-        let albumsButton = app.buttons["toolbar-albums"]
-        if albumsButton.waitForExistence(timeout: 5) {
-            albumsButton.tap()
+        let albumsTab = app.tabBars.buttons["Albums"]
+        if albumsTab.waitForExistence(timeout: 5) {
+            albumsTab.tap()
 
             // Soft wait for the Albums navigation bar or the list element.
             let albumsNavFound = app.navigationBars["Albums"].waitForExistence(timeout: 8)
@@ -177,52 +183,38 @@ final class WalkthroughUITests: XCTestCase {
             if albumsNavFound || albumsListFound {
                 capture(screenshot: app.screenshot(), name: "07-albums")
             }
-
-            // Dismiss via Done button if present, else swipe down.
-            let doneButton = app.buttons["Done"]
-            if doneButton.waitForExistence(timeout: 3) {
-                doneButton.tap()
-            } else {
-                dismissSheet(app)
-            }
         }
 
-        // MARK: - Step 8: Soft check — Batch select mode in Sorting Inbox
+        // MARK: - Step 8: Sort tab + batch-select mode
 
-        // Re-open the Sorting Inbox to test the Select button.
-        let sortingInboxButton2 = app.buttons["Sort Inbox"]
-        if sortingInboxButton2.waitForExistence(timeout: 5) {
-            sortingInboxButton2.tap()
-        } else {
-            let byID2 = app.buttons["toolbar-sorting-inbox"]
-            if byID2.waitForExistence(timeout: 3) {
-                byID2.tap()
+        let sortTab = app.tabBars.buttons["Sort"]
+        if sortTab.waitForExistence(timeout: 5) {
+            sortTab.tap()
+
+            _ = app.navigationBars["Sorting Inbox"].waitForExistence(timeout: 8)
+
+            capture(screenshot: app.screenshot(), name: "03-sorting-inbox")
+
+            // Tap Select if it exists (only shown when queue is non-empty).
+            let selectToggle = app.buttons["inbox-select-toggle"]
+            if selectToggle.waitForExistence(timeout: 5) {
+                selectToggle.tap()
+
+                // Soft-wait for the selection grid.
+                let gridFound = app.otherElements["inbox-select-grid"].waitForExistence(timeout: 5)
+                    || app.scrollViews.firstMatch.waitForExistence(timeout: 3)
+
+                if gridFound {
+                    capture(screenshot: app.screenshot(), name: "08-batch-select")
+                }
+
+                // Tap Cancel to exit select mode without mutating the photo library.
+                let cancelButton = app.buttons["Cancel"]
+                if cancelButton.waitForExistence(timeout: 3) {
+                    cancelButton.tap()
+                }
             }
         }
-        _ = app.navigationBars["Sorting Inbox"].waitForExistence(timeout: 8)
-
-        // Tap Select if it exists (only shown when queue is non-empty).
-        let selectToggle = app.buttons["inbox-select-toggle"]
-        if selectToggle.waitForExistence(timeout: 5) {
-            selectToggle.tap()
-
-            // Soft-wait for the selection grid.
-            let gridFound = app.otherElements["inbox-select-grid"].waitForExistence(timeout: 5)
-                || app.scrollViews.firstMatch.waitForExistence(timeout: 3)
-
-            if gridFound {
-                capture(screenshot: app.screenshot(), name: "08-batch-select")
-            }
-
-            // Tap Cancel to exit select mode without mutating the photo library.
-            let cancelButton = app.buttons["Cancel"]
-            if cancelButton.waitForExistence(timeout: 3) {
-                cancelButton.tap()
-            }
-        }
-
-        // Dismiss the Sorting Inbox sheet.
-        dismissSheet(app)
     }
 
     // MARK: - Helpers
@@ -236,13 +228,10 @@ final class WalkthroughUITests: XCTestCase {
 
     /// Swipe down to dismiss a modal sheet, then wait for the main grid to be visible.
     ///
-    /// On iOS the main "PixelCurator" navigation bar can still report `exists`
-    /// while a sheet is presented on top of it, so we cannot key the swipe off
-    /// the main bar's absence. Instead we swipe whenever one of the known sheet
-    /// navigation bars is present, which reliably clears the sheet before the
-    /// next step interacts with the grid underneath.
+    /// Only dismisses when one of the known sheet navigation bars is actually present —
+    /// tab switching replaces modal dismissal for inbox and albums.
     private func dismissSheet(_ app: XCUIApplication) {
-        let sheetNavs = ["Similar Photos", "Sorting Inbox", "Model Quality", "Add to album", "Albums"]
+        let sheetNavs = ["Similar Photos", "Model Quality", "Add to album"]
         if sheetNavs.contains(where: { app.navigationBars[$0].exists }) {
             app.swipeDown(velocity: .fast)
         }

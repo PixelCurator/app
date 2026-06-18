@@ -21,7 +21,7 @@ struct ContentView: View {
                     }
 
             case .authorized, .limited:
-                PhotoGridView()
+                RootTabView()
                     .task { albums.loadAlbums() }
 
             case .denied, .restricted:

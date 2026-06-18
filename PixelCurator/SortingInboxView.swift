@@ -65,8 +65,6 @@ struct SortingInboxView: View {
                             isSelecting = false
                             selectedIDs.removeAll()
                         }
-                    } else {
-                        Button("Done") { dismiss() }
                     }
                 }
                 ToolbarItemGroup(placement: .automatic) {
@@ -370,9 +368,6 @@ struct SortingInboxView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
-            Button("Done") { dismiss() }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
         }
         .padding()
     }
@@ -391,9 +386,6 @@ struct SortingInboxView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
-            Button("Done") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
         }
         .padding()
     }

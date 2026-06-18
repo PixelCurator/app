@@ -7,7 +7,6 @@ import Photos
 /// Tapping an album pushes `AlbumDetailView` via `NavigationStack` destination routing.
 struct AlbumsListView: View {
     @Environment(AlbumManager.self) private var albumManager
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -36,13 +35,6 @@ struct AlbumsListView: View {
             .accessibilityIdentifier("albums-list")
             .navigationDestination(for: AlbumManager.Album.self) { album in
                 AlbumDetailView(album: album)
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
             }
             .task {
                 albumManager.loadAlbums()

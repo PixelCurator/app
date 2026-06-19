@@ -51,10 +51,10 @@ final class LocalizationUITests: XCTestCase {
 
         // Tap Sort tab and soft-assert a German inbox string is visible.
         app.tabBars.buttons["Sortieren"].tap()
-        let inboxNavBar = app.navigationBars["Sortierpostfach"]
+        let inboxNavBar = app.navigationBars["Leuchttisch"]
         let inboxStringVisible = inboxNavBar.waitForExistence(timeout: 5)
         if !inboxStringVisible {
-            XCTFail("No German inbox string ('Sortierpostfach' nav bar) appeared after tapping Sortieren tab")
+            XCTFail("No German light-table string ('Leuchttisch' nav bar) appeared after tapping Sortieren tab")
         }
     }
 }

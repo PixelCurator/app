@@ -201,12 +201,12 @@
         }
       }
     },
-    "Inbox Zero": {
+    "All Sorted": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Postfach leer"
+            "value": "Alles sortiert"
           }
         }
       }
@@ -551,12 +551,12 @@
         }
       }
     },
-    "Sorting Inbox": {
+    "Light Table": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sortierpostfach"
+            "value": "Leuchttisch"
           }
         }
       }

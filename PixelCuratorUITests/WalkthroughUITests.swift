@@ -191,7 +191,7 @@ final class WalkthroughUITests: XCTestCase {
         if sortTab.waitForExistence(timeout: 5) {
             sortTab.tap()
 
-            _ = app.navigationBars["Sorting Inbox"].waitForExistence(timeout: 8)
+            _ = app.navigationBars["Light Table"].waitForExistence(timeout: 8)
 
             capture(screenshot: app.screenshot(), name: "03-sorting-inbox")
 

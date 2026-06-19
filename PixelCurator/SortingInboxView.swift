@@ -53,7 +53,7 @@ struct SortingInboxView: View {
                     reviewCard
                 }
             }
-            .navigationTitle("Sorting Inbox")
+            .navigationTitle("Light Table")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -379,7 +379,7 @@ struct SortingInboxView: View {
             Image(systemName: "tray")
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
-            Text("Inbox Zero")
+            Text("All Sorted")
                 .font(.title2.bold())
             Text("All indexed photos are already sorted into albums. Keep indexing more photos to get suggestions here.")
                 .font(.callout)

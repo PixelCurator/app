@@ -46,8 +46,13 @@ final class WalkthroughUITests: XCTestCase {
         XCTAssertTrue(navBar.waitForExistence(timeout: 20),
                       "Photo grid did not appear after granting access")
 
-        // Give thumbnails a moment to render.
-        _ = app.scrollViews.images.firstMatch.waitForExistence(timeout: 10)
+        // Grid must render at least one thumbnail — without thumbnails the
+        // app never indexes and every downstream step would be a smoke test
+        // of an empty surface. Hard-assert so a render regression is loud.
+        XCTAssertTrue(
+            app.scrollViews.images.firstMatch.waitForExistence(timeout: 10),
+            "Photo grid rendered no thumbnails — downstream walkthrough steps would be vacuous"
+        )
 
         capture(screenshot: app.screenshot(), name: "01-grid")
 
@@ -68,9 +73,16 @@ final class WalkthroughUITests: XCTestCase {
             if findSimilar.waitForExistence(timeout: 5) {
                 findSimilar.tap()
 
-                // Wait for the Similar Photos sheet.
+                // Wait for the Similar Photos sheet — hard-assert because
+                // this is the only place SimilaritySearch is exercised end-to
+                // end via the user-tap path. A silent regression here would
+                // leave find-similar feeling like a no-op without anyone
+                // noticing in CI.
                 let similarNav = app.navigationBars["Similar Photos"]
-                _ = similarNav.waitForExistence(timeout: 10)
+                XCTAssertTrue(
+                    similarNav.waitForExistence(timeout: 10),
+                    "Find Similar tapped but Similar Photos sheet never appeared"
+                )
             } else {
                 // Dump UI tree to attachment for debugging if context menu missing.
                 attachUITree(app, label: "debug-no-find-similar-menu")
@@ -91,20 +103,23 @@ final class WalkthroughUITests: XCTestCase {
             photosTab.tap()
         }
 
+        // Variant settings: assert the picker opens via either the label or
+        // the stable accessibility identifier. A silent regression here masks
+        // entitlement / paywall problems that show up only at upgrade time.
         let variantButton = app.buttons["Quality"]
+        let variantIDButton = app.buttons["toolbar-variant-settings"]
         if variantButton.waitForExistence(timeout: 5) {
             variantButton.tap()
-            let variantNav = app.navigationBars["Model Quality"]
-            _ = variantNav.waitForExistence(timeout: 8)
+        } else if variantIDButton.waitForExistence(timeout: 3) {
+            variantIDButton.tap()
         } else {
-            let byID = app.buttons["toolbar-variant-settings"]
-            if byID.waitForExistence(timeout: 3) {
-                byID.tap()
-                _ = app.navigationBars["Model Quality"].waitForExistence(timeout: 8)
-            } else {
-                attachUITree(app, label: "debug-no-variant-settings-button")
-            }
+            attachUITree(app, label: "debug-no-variant-settings-button")
+            XCTFail("Neither 'Quality' label nor 'toolbar-variant-settings' identifier found")
         }
+        XCTAssertTrue(
+            app.navigationBars["Model Quality"].waitForExistence(timeout: 8),
+            "Model Quality nav bar did not appear after tapping the variant picker"
+        )
 
         capture(screenshot: app.screenshot(), name: "04-variant-settings")
 
@@ -191,7 +206,13 @@ final class WalkthroughUITests: XCTestCase {
         if sortTab.waitForExistence(timeout: 5) {
             sortTab.tap()
 
-            _ = app.navigationBars["Light Table"].waitForExistence(timeout: 8)
+            // The Sort tab is one of three peer top-level destinations; if its
+            // nav bar fails to render the navigation contract is broken and
+            // every downstream sort/select interaction below is meaningless.
+            XCTAssertTrue(
+                app.navigationBars["Light Table"].waitForExistence(timeout: 8),
+                "Light Table nav bar did not appear after tapping Sort tab"
+            )
 
             capture(screenshot: app.screenshot(), name: "03-sorting-inbox")
 

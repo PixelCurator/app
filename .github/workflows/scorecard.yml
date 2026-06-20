@@ -15,12 +15,13 @@
 name: OpenSSF Scorecard
 
 on:
-  # Re-run when branch protection rules change (a scored signal).
-  branch_protection_rule:
-  schedule:
-    - cron: '27 7 * * 1'  # weekly, Monday 07:27 UTC
-  push:
-    branches: [ main ]
+  # Auto-triggers stay OFF while this repo is private — Scorecard's
+  # `ListCommits` call hits the GitHub API with the default GITHUB_TOKEN and
+  # fails with "Resource not accessible by integration" on private repos
+  # (needs GHAS or a PAT). That makes every push to main red. Re-enable the
+  # branch_protection_rule / schedule / push triggers when the repo goes
+  # public — see the WHEN THIS REPO GOES PUBLIC note above. Manual runs
+  # remain available for testing the workflow itself.
   workflow_dispatch:
 
 # Least-privilege by default; the job widens only what it needs.

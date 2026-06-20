@@ -86,4 +86,68 @@ final class EmbeddingStoreTests: XCTestCase {
         XCTAssertEqual(bIDs, Set(["photo-C"]))
         _ = container
     }
+
+    // MARK: - Prune (B-2: cascade from library change)
+
+    /// Pruning against the live asset-ID set must delete rows whose `assetID`
+    /// is missing from the set, leaving the survivors untouched.
+    func testPruneDropsRowsForMissingAssets() throws {
+        let (container, store) = try makeInMemoryStore()
+        store.upsert(assetID: "photo-A", modelID: "mobileclip_s0", vector: [1], assetModificationDate: nil)
+        store.upsert(assetID: "photo-B", modelID: "mobileclip_s0", vector: [2], assetModificationDate: nil)
+        store.upsert(assetID: "photo-C", modelID: "mobileclip_s0", vector: [3], assetModificationDate: nil)
+
+        let deleted = store.prune(keeping: ["photo-A", "photo-C"])
+        XCTAssertEqual(deleted, 1, "Only photo-B should be pruned")
+
+        let survivors = store.embeddedAssetIDs(modelID: "mobileclip_s0")
+        XCTAssertEqual(survivors, ["photo-A", "photo-C"])
+        _ = container
+    }
+
+    /// The prune must walk **all** variants — leaking a per-variant row for
+    /// a deleted asset is a real bug (the stale row would resurface on
+    /// variant switch-back).
+    func testPruneSpansAllModelIDs() throws {
+        let (container, store) = try makeInMemoryStore()
+        store.upsert(assetID: "photo-A", modelID: "mobileclip_s0", vector: [1], assetModificationDate: nil)
+        store.upsert(assetID: "photo-A", modelID: "mobileclip_b",  vector: [2], assetModificationDate: nil)
+        store.upsert(assetID: "photo-B", modelID: "mobileclip_s0", vector: [3], assetModificationDate: nil)
+        store.upsert(assetID: "photo-B", modelID: "mobileclip_b",  vector: [4], assetModificationDate: nil)
+
+        // photo-B is gone from the library — both variants must be cleaned.
+        let deleted = store.prune(keeping: ["photo-A"])
+        XCTAssertEqual(deleted, 2, "Both photo-B rows (s0 and b) must be deleted")
+
+        XCTAssertEqual(store.embeddedAssetIDs(modelID: "mobileclip_s0"), ["photo-A"])
+        XCTAssertEqual(store.embeddedAssetIDs(modelID: "mobileclip_b"),  ["photo-A"])
+        _ = container
+    }
+
+    /// Pruning against a superset (every row is alive) is a no-op.
+    func testPruneNoopWhenEveryAssetIsAlive() throws {
+        let (container, store) = try makeInMemoryStore()
+        store.upsert(assetID: "photo-A", modelID: "mobileclip_s0", vector: [1], assetModificationDate: nil)
+        store.upsert(assetID: "photo-B", modelID: "mobileclip_s0", vector: [2], assetModificationDate: nil)
+
+        let deleted = store.prune(keeping: ["photo-A", "photo-B", "photo-extra"])
+        XCTAssertEqual(deleted, 0)
+        XCTAssertEqual(store.embeddedAssetIDs(modelID: "mobileclip_s0"), ["photo-A", "photo-B"])
+        _ = container
+    }
+
+    /// Pruning against the empty set wipes the store — the cascade firing
+    /// when the user revokes photo-library access should cleanly clear all
+    /// derived data.
+    func testPruneAgainstEmptySetWipesStore() throws {
+        let (container, store) = try makeInMemoryStore()
+        store.upsert(assetID: "photo-A", modelID: "mobileclip_s0", vector: [1], assetModificationDate: nil)
+        store.upsert(assetID: "photo-B", modelID: "mobileclip_b",  vector: [2], assetModificationDate: nil)
+
+        let deleted = store.prune(keeping: [])
+        XCTAssertEqual(deleted, 2)
+        XCTAssertTrue(store.embeddedAssetIDs(modelID: "mobileclip_s0").isEmpty)
+        XCTAssertTrue(store.embeddedAssetIDs(modelID: "mobileclip_b").isEmpty)
+        _ = container
+    }
 }

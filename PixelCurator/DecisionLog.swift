@@ -64,6 +64,25 @@ struct UndoRedoStack<Element> {
     mutating func pushUndo(_ element: Element) {
         undoStack.append(element)
     }
+
+    /// Drops every entry from both stacks for which `isAlive` returns `false`.
+    ///
+    /// Used by the library-change cascade to remove decision entries whose
+    /// underlying PhotoKit object (asset or album) has been deleted out of
+    /// band — those entries can never replay successfully and would otherwise
+    /// keep `canUndo` / `canRedo` reporting `true` while every tap silently
+    /// re-fails.
+    ///
+    /// Returns the total number of entries dropped (undo + redo) for
+    /// logging / test assertions.
+    @discardableResult
+    mutating func prune(isAlive: (Element) -> Bool) -> Int {
+        let undoBefore = undoStack.count
+        let redoBefore = redoStack.count
+        undoStack.removeAll { !isAlive($0) }
+        redoStack.removeAll { !isAlive($0) }
+        return (undoBefore - undoStack.count) + (redoBefore - redoStack.count)
+    }
 }
 
 // MARK: - AssignmentDecision
@@ -274,6 +293,46 @@ final class DecisionLog {
             }
             lastRedoneAlbumName = nil
         }
+    }
+
+    // MARK: - Prune
+
+    /// Drops every undo and redo entry whose asset is no longer in
+    /// `livingAssetIDs`, or whose `albumLocalIdentifier` (when present) is no
+    /// longer in `livingAlbumIDs`.
+    ///
+    /// **Drop, not requeue.** The existing rollback path on a single failure is
+    /// for transient errors; stale entries (Photos.app deleted the asset or
+    /// album out of band) are permanently dead and must never come back. After
+    /// pruning, the `lastFailedUndoID` / `lastFailedRedoID` trackers are reset
+    /// since the entries they referred to may themselves have been dropped.
+    ///
+    /// Decisions without an `albumLocalIdentifier` (legacy / in-memory) are
+    /// kept regardless of album survival — they fall back to title-based
+    /// resolution at replay time and will surface their own error then.
+    ///
+    /// Returns the number of entries removed across both stacks.
+    @discardableResult
+    func prune(
+        keepingAssets livingAssetIDs: Set<String>,
+        livingAlbumIDs: Set<String>
+    ) -> Int {
+        let dropped = stack.prune { decision in
+            guard livingAssetIDs.contains(decision.asset.localIdentifier) else {
+                return false
+            }
+            if let albumID = decision.albumLocalIdentifier,
+               !livingAlbumIDs.contains(albumID) {
+                return false
+            }
+            return true
+        }
+        if dropped > 0 {
+            // The trackers may point at decisions that were just dropped.
+            lastFailedUndoID = nil
+            lastFailedRedoID = nil
+        }
+        return dropped
     }
 }
 

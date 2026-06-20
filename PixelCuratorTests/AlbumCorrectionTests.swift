@@ -52,6 +52,81 @@ final class AlbumCorrectionTests: XCTestCase {
         _ = container
     }
 
+    // MARK: - Prune (B-2: cascade from library change)
+
+    /// Prune must drop corrections whose asset is gone, regardless of variant.
+    func testPruneDropsCorrectionsForDeletedAssets() throws {
+        let (container, store) = try makeStore()
+        store.record(assetID: "a1", albumName: "Beach", modelID: "mobileclip_s0")
+        store.record(assetID: "a2", albumName: "Beach", modelID: "mobileclip_s0")
+        store.record(assetID: "a3", albumName: "City",  modelID: "mobileclip_b")
+
+        // a2 was deleted in Photos.app.
+        let deleted = store.prune(
+            keepingAssetIDs: ["a1", "a3"],
+            livingAlbumNames: ["Beach", "City"]
+        )
+        XCTAssertEqual(deleted, 1)
+        XCTAssertEqual(store.corrections(modelID: "mobileclip_s0").map(\.assetID), ["a1"])
+        XCTAssertEqual(store.corrections(modelID: "mobileclip_b").map(\.assetID),  ["a3"])
+        _ = container
+    }
+
+    /// Prune must drop corrections pointing at deleted albums — a stale
+    /// "Vacation" exemplar after the album is gone would be a ghost label.
+    func testPruneDropsCorrectionsForDeletedAlbums() throws {
+        let (container, store) = try makeStore()
+        store.record(assetID: "a1", albumName: "Beach", modelID: "mobileclip_s0")
+        store.record(assetID: "a2", albumName: "OldAlbum", modelID: "mobileclip_s0")
+
+        let deleted = store.prune(
+            keepingAssetIDs: ["a1", "a2"],
+            livingAlbumNames: ["Beach"]
+        )
+        XCTAssertEqual(deleted, 1)
+        XCTAssertEqual(store.corrections(modelID: "mobileclip_s0").map(\.assetID), ["a1"])
+        _ = container
+    }
+
+    /// Prune must clean up corrections that fail **either** predicate — the
+    /// OR semantics matter so a row that lost both its asset and its album
+    /// still gets dropped exactly once. Distinct (assetID, modelID) composite
+    /// keys are used so the `@Attribute(.unique)` upsert path doesn't collapse
+    /// the rows into one.
+    func testPruneDropsRowsFailingEitherPredicate() throws {
+        let (container, store) = try makeStore()
+        store.record(assetID: "alive-asset", albumName: "dead-album",  modelID: "mobileclip_s0")
+        store.record(assetID: "dead-asset",  albumName: "alive-album", modelID: "mobileclip_s0")
+        store.record(assetID: "dead-asset",  albumName: "dead-album",  modelID: "mobileclip_b")
+        store.record(assetID: "alive-asset", albumName: "alive-album", modelID: "mobileclip_b")
+
+        let deleted = store.prune(
+            keepingAssetIDs: ["alive-asset"],
+            livingAlbumNames: ["alive-album"]
+        )
+        // Three of four rows fail either predicate (only alive-asset+alive-album survives).
+        XCTAssertEqual(deleted, 3)
+        let s0Survivors = store.corrections(modelID: "mobileclip_s0")
+        let bSurvivors  = store.corrections(modelID: "mobileclip_b")
+        XCTAssertTrue(s0Survivors.isEmpty)
+        XCTAssertEqual(bSurvivors.count, 1)
+        XCTAssertEqual(bSurvivors.first?.assetID, "alive-asset")
+        XCTAssertEqual(bSurvivors.first?.albumName, "alive-album")
+        _ = container
+    }
+
+    func testPruneNoopWhenEverythingAlive() throws {
+        let (container, store) = try makeStore()
+        store.record(assetID: "a1", albumName: "Beach", modelID: "mobileclip_s0")
+        let deleted = store.prune(
+            keepingAssetIDs: ["a1"],
+            livingAlbumNames: ["Beach"]
+        )
+        XCTAssertEqual(deleted, 0)
+        XCTAssertEqual(store.corrections(modelID: "mobileclip_s0").count, 1)
+        _ = container
+    }
+
     // MARK: - Behavioral: a correction shifts the ranking
 
     /// A correction is, in effect, an extra labeled point fed into `rank`.

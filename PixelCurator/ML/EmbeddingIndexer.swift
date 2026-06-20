@@ -76,6 +76,18 @@ final class EmbeddingIndexer {
     /// `cancelAndWait()`) before constructing a replacement indexer over the
     /// same `ModelContext`.
     func index(assets: [PHAsset]) async {
+        // Defensive re-entry guard. PR #26 fixed cross-instance races via
+        // `cancelAndWait()`, but the *same* indexer can still be re-entered
+        // when `PhotoGridView.task(id: library.assets.count)` refires during
+        // a pending variant switch (see also `\.isSwitchingVariant` in
+        // `PixelCuratorApp`). If a prior run is still in flight, await it
+        // instead of starting a second one in parallel — `currentTask` is
+        // serializable but two concurrent runs would race the `indexed` /
+        // `total` counters.
+        if let inFlight = currentTask, !inFlight.isCancelled, isIndexing {
+            await inFlight.value
+            return
+        }
         let task = Task { [weak self] in
             guard let self else { return }
             await self.runIndex(assets: assets)

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import PixelCurator
 
 // MARK: - SortingCoordinatorTests
@@ -116,6 +117,51 @@ final class SortingCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(inbox.count, 10, "All 10 assets should enter the inbox")
+    }
+
+    // MARK: - updateVariant (S-4)
+
+    /// `updateVariant` must rebind data sources to a new variant without
+    /// reallocating the coordinator — Undo history (decisionLog) survives,
+    /// and the modelID is observable on the same instance.
+    @MainActor
+    func testUpdateVariant_swapsModelIDAndPreservesDecisionLog() throws {
+        let container = try ModelContainer(
+            for: PhotoEmbedding.self, AlbumCorrection.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+
+        let albums = AlbumManager()
+        let library = PhotoController()
+        let log = DecisionLog(operations: albums)
+
+        let coordinator = SortingCoordinator(
+            store: EmbeddingStore(context: context),
+            suggester: AlbumSuggester(),
+            albumManager: albums,
+            photoController: library,
+            modelID: "variant-A",
+            decisionLog: log,
+            correctionStore: CorrectionStore(context: context)
+        )
+        XCTAssertEqual(coordinator.modelID, "variant-A")
+        XCTAssertTrue(coordinator.decisionLog === log)
+
+        coordinator.updateVariant(
+            store: EmbeddingStore(context: context),
+            suggester: AlbumSuggester(),
+            correctionStore: CorrectionStore(context: context),
+            modelID: "variant-B"
+        )
+
+        XCTAssertEqual(coordinator.modelID, "variant-B",
+                       "updateVariant must swap the modelID")
+        XCTAssertTrue(coordinator.decisionLog === log,
+                       "updateVariant must preserve the existing decisionLog instance")
+        XCTAssertFalse(coordinator.isSorting,
+                       "updateVariant must reset the active session")
+        XCTAssertEqual(coordinator.sortedCount, 0)
     }
 
     /// After filtering, assets that were album-members on a second pass

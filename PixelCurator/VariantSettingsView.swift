@@ -25,8 +25,22 @@ struct VariantSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            List(CLIPVariant.allCases) { variant in
-                variantRow(variant)
+            List {
+                Section {
+                    ForEach(CLIPVariant.allCases) { variant in
+                        variantRow(variant)
+                    }
+                } footer: {
+                    // Honest disclosure: pro variants are downloaded from a
+                    // third-party host (huggingface.co) which sees the user's
+                    // IP. This breaks the "fully on-device" claim if read
+                    // strictly; the disclosure keeps the privacy story honest.
+                    // Switching to bundled / self-hosted variants in the
+                    // future would let us drop this footer.
+                    Text("Quality variants are downloaded from huggingface.co. Your IP address is visible to HuggingFace when downloading.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Model Quality")
             #if os(iOS)

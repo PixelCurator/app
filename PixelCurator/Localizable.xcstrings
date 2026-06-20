@@ -301,6 +301,16 @@
         }
       }
     },
+    "Quality variants are downloaded from huggingface.co. Your IP address is visible to HuggingFace when downloading.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualitätsvarianten werden von huggingface.co heruntergeladen. Deine IP-Adresse ist dabei für HuggingFace sichtbar."
+          }
+        }
+      }
+    },
     "Move to Album": {
       "localizations": {
         "de": {

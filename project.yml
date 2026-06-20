@@ -42,7 +42,7 @@ targets:
         ENABLE_PREVIEWS: YES
         # Photo library usage strings (written into the generated Info.plist)
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "PixelCurator reads your photo library to suggest album assignments on-device."
-        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "PixelCurator organizes photos into albums you confirm."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "PixelCurator adds photos to existing albums or creates new ones when you confirm."
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         # macOS window behaviour

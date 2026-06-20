@@ -54,10 +54,83 @@ final class AlbumManager: AlbumOperations {
 
     // MARK: - Write
 
+    /// The outcome of an `assignAndResolve` call.
+    ///
+    /// `.added` and `.alreadyMember` both carry the resolved
+    /// `PHAssetCollection.localIdentifier` so callers can record a
+    /// duplicate-name-safe undo entry. `.alreadyMember` lets callers skip
+    /// recording a phantom decision when the asset was already in the album
+    /// before the call (S-1 idempotency).
+    enum AssignResult: Equatable {
+        case added(albumID: String)
+        case alreadyMember(albumID: String)
+        case failed
+    }
+
     /// Adds an asset to a named album, creating the album if it does not exist.
+    ///
+    /// Title-only API kept for `AlbumOperations` protocol parity and for the
+    /// Move-rollback path in `AlbumReviewViews`. New call sites that need to
+    /// record an undo entry should use `assignAndResolve` instead so that the
+    /// resolved `PHAssetCollection.localIdentifier` can be threaded into the
+    /// `DecisionLog`.
     func assign(_ asset: PHAsset, toAlbumNamed name: String) async -> Bool {
+        switch await assignAndResolve(asset, toAlbumNamed: name) {
+        case .added, .alreadyMember:
+            return true
+        case .failed:
+            return false
+        }
+    }
+
+    /// Adds an asset to a named album (creating it if missing) and returns the
+    /// resolved album `localIdentifier` together with whether the add was a
+    /// no-op because the asset was already a member.
+    ///
+    /// - The membership check is performed against the resolved
+    ///   `PHAssetCollection` *before* the `performChanges` block so callers can
+    ///   skip recording a phantom undo entry on a no-op (S-1).
+    /// - The returned `albumID` lets callers record an undo decision that
+    ///   targets the exact collection — Photos.app permits duplicate-named
+    ///   albums and a title-based undo would otherwise mutate a sibling.
+    func assignAndResolve(_ asset: PHAsset, toAlbumNamed name: String) async -> AssignResult {
         do {
             let collection = try await findOrCreateAlbum(named: name)
+            let albumID = collection.localIdentifier
+            if isAsset(asset, memberOf: collection) {
+                return .alreadyMember(albumID: albumID)
+            }
+            try await PHPhotoLibrary.shared().performChanges {
+                guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
+                request.addAssets([asset] as NSArray)
+            }
+            loadAlbums()
+            return .added(albumID: albumID)
+        } catch {
+            lastError = error.localizedDescription
+            return .failed
+        }
+    }
+
+    /// Adds an asset to the album identified by `albumLocalIdentifier`.
+    ///
+    /// Used by `DecisionLog.redo()` so a redo targets the exact collection the
+    /// original assignment landed in, never a duplicate-named sibling.
+    /// Returns `false` (and sets `lastError`) if the album no longer exists or
+    /// the Photos change request fails.
+    func assign(_ asset: PHAsset, toAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        let result = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [albumLocalIdentifier], options: nil
+        )
+        guard let collection = result.firstObject else {
+            lastError = "Album not found."
+            return false
+        }
+        if isAsset(asset, memberOf: collection) {
+            // Already a member — treat as success so redo is idempotent.
+            return true
+        }
+        do {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
@@ -68,6 +141,14 @@ final class AlbumManager: AlbumOperations {
             lastError = error.localizedDescription
             return false
         }
+    }
+
+    /// `true` iff `asset` is currently a member of `collection`.
+    private func isAsset(_ asset: PHAsset, memberOf collection: PHAssetCollection) -> Bool {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localIdentifier = %@", asset.localIdentifier)
+        options.fetchLimit = 1
+        return PHAsset.fetchAssets(in: collection, options: options).count > 0
     }
 
     /// Removes an asset from a named album. Does not delete the album itself.

@@ -7,9 +7,21 @@ import SwiftUI
 /// A protocol that abstracts the PhotoKit assign/remove side effects so
 /// DecisionLog can be driven from tests with a mock instead of a real
 /// AlbumManager and a real PHPhotoLibrary.
+///
+/// Two parallel surfaces exist intentionally:
+/// - **By-name** (`toAlbumNamed:` / `fromAlbumNamed:`) — title-based PHFetch.
+///   Used as a fallback when no `PHAssetCollection.localIdentifier` is known,
+///   and by paths that have not (yet) been migrated to by-id.
+/// - **By-id** (`toAlbumWithID:` / `fromAlbumWithID:`) — `localIdentifier`-based
+///   PHFetch. Photos.app permits duplicate-named albums, so a title lookup
+///   may resolve to a different collection than the one the user actually
+///   targeted. Anywhere we already have the collection's `localIdentifier`
+///   (e.g. immediately after `assign` resolves), prefer the by-id surface.
 protocol AlbumOperations: AnyObject {
     func assign(_ asset: PHAsset, toAlbumNamed name: String) async -> Bool
+    func assign(_ asset: PHAsset, toAlbumWithID albumLocalIdentifier: String) async -> Bool
     func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool
+    func remove(_ asset: PHAsset, fromAlbumWithID albumLocalIdentifier: String) async -> Bool
 }
 
 // MARK: - UndoRedoStack (pure, generic, no PHAsset dependency)
@@ -60,12 +72,20 @@ struct AssignmentDecision: Identifiable, Hashable {
     let id: UUID
     let asset: PHAsset
     let albumName: String
+    /// `PHAssetCollection.localIdentifier` of the album the asset was assigned to.
+    ///
+    /// When present, undo/redo route through the by-id `AlbumOperations` surface so
+    /// duplicate-named albums (which Photos.app permits) can never silently mutate
+    /// the wrong collection. Optional only to allow in-memory decisions recorded
+    /// before the by-id migration to fall back to the title-based path.
+    let albumLocalIdentifier: String?
     let date: Date
 
-    init(asset: PHAsset, albumName: String) {
+    init(asset: PHAsset, albumName: String, albumLocalIdentifier: String? = nil) {
         self.id = UUID()
         self.asset = asset
         self.albumName = albumName
+        self.albumLocalIdentifier = albumLocalIdentifier
         self.date = Date()
     }
 
@@ -121,8 +141,16 @@ final class DecisionLog {
     // MARK: - Record
 
     /// Records a new assignment decision. Clears redo history.
-    func record(asset: PHAsset, albumName: String) {
-        let decision = AssignmentDecision(asset: asset, albumName: albumName)
+    ///
+    /// Pass `albumLocalIdentifier` whenever it is known (i.e. resolved by
+    /// `AlbumManager.assignAndResolve`) so that undo/redo can route through the
+    /// duplicate-name-safe by-id `AlbumOperations` surface.
+    func record(asset: PHAsset, albumName: String, albumLocalIdentifier: String? = nil) {
+        let decision = AssignmentDecision(
+            asset: asset,
+            albumName: albumName,
+            albumLocalIdentifier: albumLocalIdentifier
+        )
         stack.record(decision)
         lastUndoneAlbumName = nil
         lastRedoneAlbumName = nil
@@ -138,7 +166,15 @@ final class DecisionLog {
         // produces a nil -> value transition that @Observable observers (the
         // toast) can detect; otherwise the second toast is silently dropped.
         lastUndoneAlbumName = nil
-        let ok = await operations.remove(decision.asset, fromAlbumNamed: decision.albumName)
+        // Prefer by-id whenever the decision carries the album's localIdentifier
+        // — Photos.app permits duplicate-named albums, so title-based remove
+        // could mutate a sibling collection.
+        let ok: Bool
+        if let albumID = decision.albumLocalIdentifier {
+            ok = await operations.remove(decision.asset, fromAlbumWithID: albumID)
+        } else {
+            ok = await operations.remove(decision.asset, fromAlbumNamed: decision.albumName)
+        }
         if ok {
             stack.pushRedo(decision)
             lastUndoneAlbumName = decision.albumName
@@ -158,7 +194,14 @@ final class DecisionLog {
         // Reset first (see undo) so a repeat redo to the same album still
         // produces an observable nil -> value transition for the toast.
         lastRedoneAlbumName = nil
-        let ok = await operations.assign(decision.asset, toAlbumNamed: decision.albumName)
+        // Same by-id discipline as undo: a duplicate-named album in the
+        // library must not be able to capture the redo by accident.
+        let ok: Bool
+        if let albumID = decision.albumLocalIdentifier {
+            ok = await operations.assign(decision.asset, toAlbumWithID: albumID)
+        } else {
+            ok = await operations.assign(decision.asset, toAlbumNamed: decision.albumName)
+        }
         if ok {
             stack.pushUndo(decision)
             lastRedoneAlbumName = decision.albumName

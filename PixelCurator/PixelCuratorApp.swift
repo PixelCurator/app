@@ -119,9 +119,17 @@ struct PixelCuratorApp: App {
     /// Switches the active CLIP variant. Called from `VariantSettingsView`.
     ///
     /// Guard: locked variants are rejected. The switch cancels any in-flight
-    /// indexing, rebuilds the Embedder + EmbeddingIndexer + SimilaritySearch for
-    /// the new variant, and kicks off a new indexing run. Old embeddings for other
-    /// variants remain in SwiftData and are reactivated if the user switches back.
+    /// indexing, **awaits its actual completion**, and only then rebuilds the
+    /// Embedder + EmbeddingIndexer + SimilaritySearch for the new variant.
+    /// Old embeddings for other variants remain in SwiftData and are
+    /// reactivated if the user switches back.
+    ///
+    /// The await-before-rebuild step is load-bearing: every service shares the
+    /// same `modelContainer.mainContext`, and the prior indexer's trailing
+    /// `context.save()` plus `isIndexing = false` writes must land before a
+    /// replacement indexer starts touching that context. Without the await,
+    /// the two indexers transiently share the context — save-ordering is
+    /// undefined and the dead indexer can flip the new one's `isIndexing` flag.
     @MainActor
     private func switchVariant(_ variant: CLIPVariant) {
         guard entitlements.isUnlocked(variant) else {
@@ -130,10 +138,12 @@ struct PixelCuratorApp: App {
         }
         guard variant != activeVariant else { return }
 
-        // Cancel the current indexer before rebuilding.
-        indexer?.cancelIndexing()
+        let priorIndexer = indexer
 
         Task {
+            // Cancel + await completion of the in-flight indexer before
+            // constructing the replacement against the same ModelContext.
+            await priorIndexer?.cancelAndWait()
             await bootIndexer(variant: variant)
         }
     }

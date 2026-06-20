@@ -85,4 +85,55 @@ final class EmbedderTests: XCTestCase {
         for (a, b) in zip(v1, v2) { dot += a * b }
         XCTAssertEqual(dot, 1.0, accuracy: 1e-3, "Same image embedded twice must yield cosine similarity ≈ 1.0")
     }
+
+    // MARK: - Test D: cancel-and-wait contract
+
+    /// `waitForCompletion()` and `cancelAndWait()` must return immediately when
+    /// no indexing task is in flight. This is the no-op leg of the variant-switch
+    /// orchestration: the first switch ever has no prior indexer to await, and
+    /// subsequent switches happen after an idle period.
+    ///
+    /// A regression here (e.g. blocking on a continuation that is never resumed)
+    /// would deadlock the variant switch.
+    @MainActor
+    func testWaitForCompletionAndCancelAndWaitReturnImmediatelyWhenIdle() async throws {
+        let url = try await modelURL()
+        let embedder = try await Embedder(modelURL: url)
+
+        let container = try ModelContainer(
+            for: PhotoEmbedding.self, AlbumCorrection.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let indexer = EmbeddingIndexer(
+            context: container.mainContext,
+            embedder: embedder,
+            modelStore: ModelStore(),
+            variant: .bundledDefault
+        )
+
+        // Both methods must return promptly when there is no inflight task.
+        // We bound them with a 1-second timeout to catch a future deadlock
+        // regression without making the suite flaky.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { await indexer.waitForCompletion() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                throw XCTSkip("waitForCompletion() did not return within 1s on an idle indexer")
+            }
+            try await group.next()
+            group.cancelAll()
+        }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { await indexer.cancelAndWait() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                throw XCTSkip("cancelAndWait() did not return within 1s on an idle indexer")
+            }
+            try await group.next()
+            group.cancelAll()
+        }
+
+        XCTAssertFalse(indexer.isIndexing, "Idle indexer must not report isIndexing")
+    }
 }

@@ -20,6 +20,49 @@ final class PhotoController: NSObject, PHPhotoLibraryChangeObserver {
     var authState: AuthState = .unknown
     var assets: [PHAsset] = []
 
+    /// Local identifiers of assets that are NOT currently available on this
+    /// device — i.e. iCloud-only. Populated as a side-effect of `loadAssets()`
+    /// (and after every library-change debounce) by probing each asset with a
+    /// tiny `requestImage(... isNetworkAccessAllowed = false)` and reading
+    /// `PHImageResultIsInCloudKey` from the info dictionary.
+    ///
+    /// This is the public, App-Review-safe detection path. The alternative —
+    /// `value(forKey: "locallyAvailable")` KVC on `PHAssetResource` — is
+    /// faster but reaches into private state and risks rejection.
+    ///
+    /// Read by `isCloudOnly(_:)` (O(1) lookup on render) and by the
+    /// `hideICloudPhotos` filter in `visibleAssets`.
+    var cloudOnlyAssetIDs: Set<String> = []
+
+    /// `true` while `cloudOnlyAssetIDs` is being recomputed in the background.
+    /// Views can use this to show a subtle loading state instead of briefly
+    /// rendering iCloud-only photos un-badged.
+    var isProbingCloudStatus: Bool = false
+
+    /// `true` if iCloud-only photos should be hidden from the visible grid.
+    /// Mirrors the `@AppStorage("hideICloudPhotos")` value owned by views;
+    /// `PixelCuratorApp` writes through to this property so the controller can
+    /// produce a pre-filtered `visibleAssets` array. `@Observable` tracks reads
+    /// of this property, so flipping it invalidates any view that read
+    /// `visibleAssets`.
+    var hideICloudPhotos: Bool = false
+
+    /// Assets the photo grid should render — `assets` minus iCloud-only ones
+    /// when `hideICloudPhotos` is `true`. Pure derived value; `@Observable`
+    /// will re-evaluate dependent views when any of `assets`,
+    /// `cloudOnlyAssetIDs`, or `hideICloudPhotos` changes.
+    var visibleAssets: [PHAsset] {
+        guard hideICloudPhotos else { return assets }
+        return assets.filter { !cloudOnlyAssetIDs.contains($0.localIdentifier) }
+    }
+
+    /// O(1) lookup for whether a given asset is iCloud-only.
+    /// Use this from the thumbnail cell's badge overlay — calling
+    /// `assetResources(for:)` per render frame is too slow for large grids.
+    func isCloudOnly(_ asset: PHAsset) -> Bool {
+        cloudOnlyAssetIDs.contains(asset.localIdentifier)
+    }
+
     /// Invoked on the main actor after a `PHPhotoLibrary` change has been
     /// applied to `assets`. The app wires this to a cascade prune over
     /// `EmbeddingStore`, `CorrectionStore`, and `DecisionLog` so stale derived
@@ -79,6 +122,10 @@ final class PhotoController: NSObject, PHPhotoLibraryChangeObserver {
     /// entire library — required so that every existing-album photo is embedded
     /// and available as a labeled point for `AlbumSuggester`, and so the sorting
     /// inbox sees all unsorted photos rather than only the 500 most recent.
+    ///
+    /// After collecting the assets, kicks off a background probe to populate
+    /// `cloudOnlyAssetIDs` — used by the iCloud badge overlay and the
+    /// hide-iCloud filter.
     func loadAssets(limit: Int = 0) {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -90,6 +137,72 @@ final class PhotoController: NSObject, PHPhotoLibraryChangeObserver {
         collected.reserveCapacity(result.count)
         result.enumerateObjects { asset, _, _ in collected.append(asset) }
         assets = collected
+
+        // Recompute the iCloud-only set in the background. We rely on
+        // `@Observable` to re-publish `cloudOnlyAssetIDs` (and downstream
+        // `visibleAssets`) as the probe progresses.
+        Task { [weak self] in
+            await self?.recomputeCloudOnlyStatus()
+        }
+    }
+
+    // MARK: - iCloud-only detection
+
+    /// Recomputes `cloudOnlyAssetIDs` by issuing a tiny, network-disabled
+    /// thumbnail request for every asset and reading `PHImageResultIsInCloudKey`
+    /// from the info dictionary.
+    ///
+    /// Why this approach over `PHAssetResource.value(forKey: "locallyAvailable")`:
+    ///   - Pure public API; no KVC into private state, no App Review risk.
+    ///   - The request never downloads — `isNetworkAccessAllowed = false`
+    ///     forces PhotoKit to return immediately with `info[…IsInCloudKey] = true`
+    ///     for assets not yet on disk.
+    ///   - Tradeoff: async, one PhotoKit round-trip per asset. On a 30 000-asset
+    ///     library this is observable but not blocking — the result is cached
+    ///     on the controller and re-used until the next library-change.
+    private func recomputeCloudOnlyStatus() async {
+        isProbingCloudStatus = true
+        defer { isProbingCloudStatus = false }
+
+        let snapshot = assets
+        var cloudOnly: Set<String> = []
+        // Reserve a small buffer; most libraries are mostly-local.
+        cloudOnly.reserveCapacity(snapshot.count / 8)
+
+        for asset in snapshot {
+            if Task.isCancelled { return }
+            if await isAssetInCloud(asset) {
+                cloudOnly.insert(asset.localIdentifier)
+            }
+        }
+        cloudOnlyAssetIDs = cloudOnly
+    }
+
+    /// One-shot probe for a single asset. Requests an 8×8 thumbnail with
+    /// network access disabled — PhotoKit answers immediately with the info
+    /// dictionary, setting `PHImageResultIsInCloudKey = true` if the image
+    /// would have required a download.
+    ///
+    /// `.highQualityFormat` (not `.opportunistic`) is load-bearing — the
+    /// opportunistic mode invokes the completion handler more than once,
+    /// which would trap inside `withCheckedContinuation`'s resume-once rule.
+    private func isAssetInCloud(_ asset: PHAsset) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .fast
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+            imageManager.requestImage(
+                for: asset,
+                targetSize: CGSize(width: 8, height: 8),
+                contentMode: .aspectFill,
+                options: options
+            ) { _, info in
+                let isInCloud = (info?[PHImageResultIsInCloudKey] as? Bool) ?? false
+                continuation.resume(returning: isInCloud)
+            }
+        }
     }
 
     // MARK: - Thumbnails
@@ -180,9 +293,13 @@ final class PhotoController: NSObject, PHPhotoLibraryChangeObserver {
             // Access revoked. Clear the local cache so views don't show ghost
             // thumbnails for assets we can no longer fetch.
             assets = []
+            cloudOnlyAssetIDs = []
             await onLibraryDidChange?()
             return
         }
+        // `loadAssets()` also schedules `recomputeCloudOnlyStatus()` in a
+        // detached task, so the iCloud badge / hide filter stays consistent
+        // with whatever new assets just arrived from the library change.
         loadAssets()
         await onLibraryDidChange?()
     }

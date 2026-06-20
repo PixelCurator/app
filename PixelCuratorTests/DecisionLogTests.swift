@@ -128,12 +128,20 @@ final class UndoRedoStackTests: XCTestCase {
 import Photos
 
 /// Records calls without touching PhotoKit.
+///
+/// Each call captures the routing surface (`byName` vs `byID`) so tests can
+/// assert that DecisionLog actually routes through the duplicate-name-safe
+/// by-id path when the decision carries a `localIdentifier`.
 final class MockAlbumOperations: AlbumOperations {
     struct Call: Equatable {
         enum Kind { case assign, remove }
+        enum Surface { case byName, byID }
         let kind: Kind
+        let surface: Surface
         let assetID: String
-        let albumName: String
+        /// Album title (when `surface == .byName`) or `PHAssetCollection.localIdentifier`
+        /// (when `surface == .byID`).
+        let target: String
     }
 
     var calls: [Call] = []
@@ -141,12 +149,34 @@ final class MockAlbumOperations: AlbumOperations {
     var removeShouldSucceed = true
 
     func assign(_ asset: PHAsset, toAlbumNamed name: String) async -> Bool {
-        calls.append(Call(kind: .assign, assetID: asset.localIdentifier, albumName: name))
+        calls.append(Call(
+            kind: .assign, surface: .byName,
+            assetID: asset.localIdentifier, target: name
+        ))
+        return assignShouldSucceed
+    }
+
+    func assign(_ asset: PHAsset, toAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        calls.append(Call(
+            kind: .assign, surface: .byID,
+            assetID: asset.localIdentifier, target: albumLocalIdentifier
+        ))
         return assignShouldSucceed
     }
 
     func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool {
-        calls.append(Call(kind: .remove, assetID: asset.localIdentifier, albumName: name))
+        calls.append(Call(
+            kind: .remove, surface: .byName,
+            assetID: asset.localIdentifier, target: name
+        ))
+        return removeShouldSucceed
+    }
+
+    func remove(_ asset: PHAsset, fromAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        calls.append(Call(
+            kind: .remove, surface: .byID,
+            assetID: asset.localIdentifier, target: albumLocalIdentifier
+        ))
         return removeShouldSucceed
     }
 }
@@ -162,6 +192,18 @@ final class MockAlbumOperations: AlbumOperations {
 // Because PHAsset is not constructable, the DecisionLog tests
 // verify: (a) record→canUndo, (b) record clears redo, (c) canRedo
 // transitions — all state that does NOT require calling assign/remove.
+
+/// A `PHAsset` subclass that fakes only the bits DecisionLog cares about
+/// (`localIdentifier`) without requiring a real PhotoKit fetch. Photos is
+/// Objective-C-bridged so this Swift override works at runtime.
+final class StubPHAsset: PHAsset {
+    private let stubID: String
+    init(localIdentifier: String) {
+        self.stubID = localIdentifier
+        super.init()
+    }
+    override var localIdentifier: String { stubID }
+}
 
 @MainActor
 final class DecisionLogStateTests: XCTestCase {
@@ -183,21 +225,276 @@ final class DecisionLogStateTests: XCTestCase {
         XCTAssertTrue(log.redoStack.isEmpty)
     }
 
-    // MARK: - UndoRedoStack integration via record (no PHAsset)
-    //
-    // We drive the pure stack path directly to verify DecisionLog
-    // wires record() → UndoRedoStack correctly.
+    // MARK: - record
 
-    func testCanUndoAfterRecordViaStack() {
-        // White-box: UndoRedoStack<AssignmentDecision> is tested directly
-        // for count/order; here we verify the public property forwarding.
+    func testRecordPushesOntoUndoStack() {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        XCTAssertTrue(log.canUndo)
+        XCTAssertFalse(log.canRedo)
+        XCTAssertEqual(log.undoStack.count, 1)
+        XCTAssertEqual(log.undoStack.first?.albumName, "Vacation")
+        XCTAssertEqual(log.undoStack.first?.albumLocalIdentifier, "album-id-1")
+    }
+
+    func testRecordClearsLastUndoneAndLastRedone() async {
+        // Bring the log into a state where lastUndoneAlbumName is set,
+        // then verify a new record() resets it.
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        XCTAssertEqual(log.lastUndoneAlbumName, "Vacation")
+
+        log.record(asset: asset, albumName: "Family", albumLocalIdentifier: "album-id-2")
+        XCTAssertNil(log.lastUndoneAlbumName, "Recording must reset lastUndoneAlbumName")
+        XCTAssertNil(log.lastRedoneAlbumName)
+    }
+}
+
+// MARK: - DecisionLog side-effect tests (T-1 gap)
+//
+// Drives the async undo/redo paths through the MockAlbumOperations seam to
+// cover:
+//   • by-id routing when albumLocalIdentifier is present, title fallback when not
+//   • lastUndoneAlbumName / lastRedoneAlbumName transitions, including the
+//     nil → value reset that drives the toast (DecisionLog.swift:140 / :160)
+//   • rollback semantics on operation failure (the entry stays on its stack)
+//   • duplicate-name regression: id, not title, decides which album is mutated
+
+@MainActor
+final class DecisionLogSideEffectTests: XCTestCase {
+
+    var mock: MockAlbumOperations!
+    var log: DecisionLog!
+
+    override func setUp() async throws {
+        mock = MockAlbumOperations()
+        log = DecisionLog(operations: mock)
+    }
+
+    // MARK: - undo() success path
+
+    func testUndoSuccess_movesEntryToRedoStackAndSetsLastUndoneAlbumName() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+
+        await log.undo()
+
         XCTAssertFalse(log.canUndo)
-        // We can't call log.record(asset:albumName:) without a real PHAsset.
-        // Instead validate that canUndo/canRedo mirror the underlying stack
-        // through the pure UndoRedoStack tests above (which use String elements).
-        // This test documents the design intent.
-        XCTAssertEqual(log.undoStack.count, 0)
-        XCTAssertEqual(log.redoStack.count, 0)
+        XCTAssertTrue(log.canRedo)
+        XCTAssertEqual(log.redoStack.count, 1)
+        XCTAssertEqual(log.lastUndoneAlbumName, "Vacation")
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].kind, .remove)
+        XCTAssertEqual(mock.calls[0].surface, .byID)
+        XCTAssertEqual(mock.calls[0].target, "album-id-1")
+    }
+
+    // MARK: - undo() failure path
+
+    func testUndoFailure_keepsEntryOnUndoStack_andLeavesLastUndoneNil() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        mock.removeShouldSucceed = false
+
+        await log.undo()
+
+        XCTAssertTrue(log.canUndo, "Failed undo must roll the entry back onto the undo stack")
+        XCTAssertFalse(log.canRedo)
+        XCTAssertEqual(log.undoStack.count, 1)
+        XCTAssertNil(log.lastUndoneAlbumName)
+    }
+
+    // MARK: - undo() toast trigger contract (DecisionLog.swift:140-149)
+
+    func testTwoConsecutiveUndosToSameAlbumEachProduceNilThenValueTransition() async {
+        // Two assignments to the SAME album. The second undo must still
+        // produce an observable nil → "Vacation" transition for the toast,
+        // even though the property value (Vacation) does not change.
+        let asset1 = StubPHAsset(localIdentifier: "asset-1")
+        let asset2 = StubPHAsset(localIdentifier: "asset-2")
+        log.record(asset: asset1, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        log.record(asset: asset2, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+
+        await log.undo()
+        XCTAssertEqual(log.lastUndoneAlbumName, "Vacation")
+
+        // Spy on the transition by instrumenting the mock to capture the
+        // value of lastUndoneAlbumName the instant the underlying operation
+        // is invoked — at that point DecisionLog must have reset it to nil.
+        var observedDuringRemoveCall: String? = "<not set>"
+        let spy = TransitionSpyAlbumOperations { [weak self] in
+            observedDuringRemoveCall = self?.log.lastUndoneAlbumName
+        }
+        log = DecisionLog(operations: spy)
+        log.record(asset: asset1, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        log.record(asset: asset2, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        XCTAssertEqual(observedDuringRemoveCall, nil,
+                       "lastUndoneAlbumName must be reset to nil before the operation runs " +
+                       "so two undos to the same album each produce a nil → value transition")
+        XCTAssertEqual(log.lastUndoneAlbumName, "Vacation",
+                       "After the operation succeeds, lastUndoneAlbumName must be set again")
+    }
+
+    // MARK: - redo() success path
+
+    func testRedoSuccess_movesEntryToUndoStackAndSetsLastRedoneAlbumName() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        mock.calls.removeAll()
+
+        await log.redo()
+
+        XCTAssertTrue(log.canUndo)
+        XCTAssertFalse(log.canRedo)
+        XCTAssertEqual(log.undoStack.count, 1)
+        XCTAssertEqual(log.lastRedoneAlbumName, "Vacation")
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].kind, .assign)
+        XCTAssertEqual(mock.calls[0].surface, .byID)
+        XCTAssertEqual(mock.calls[0].target, "album-id-1")
+    }
+
+    // MARK: - redo() failure path
+
+    func testRedoFailure_keepsEntryOnRedoStack_andLeavesLastRedoneNil() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        mock.assignShouldSucceed = false
+
+        await log.redo()
+
+        XCTAssertTrue(log.canRedo, "Failed redo must roll the entry back onto the redo stack")
+        XCTAssertFalse(log.canUndo)
+        XCTAssertEqual(log.redoStack.count, 1)
+        XCTAssertNil(log.lastRedoneAlbumName)
+    }
+
+    // MARK: - redo() toast trigger contract
+
+    func testTwoConsecutiveRedosToSameAlbumEachProduceNilThenValueTransition() async {
+        let asset1 = StubPHAsset(localIdentifier: "asset-1")
+        let asset2 = StubPHAsset(localIdentifier: "asset-2")
+
+        var observedDuringAssignCall: String? = "<not set>"
+        let spy = TransitionSpyAlbumOperations { [weak self] in
+            observedDuringAssignCall = self?.log.lastRedoneAlbumName
+        }
+        log = DecisionLog(operations: spy)
+        // Record two, undo two — gets us to two redo-stack entries for the same album.
+        log.record(asset: asset1, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        log.record(asset: asset2, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        await log.undo()
+        // First redo lands.
+        await log.redo()
+        // Second redo to the SAME album — verify the nil → value transition.
+        observedDuringAssignCall = "<not set>"
+        await log.redo()
+        XCTAssertEqual(observedDuringAssignCall, nil,
+                       "lastRedoneAlbumName must be reset to nil before the operation runs " +
+                       "so two redos to the same album each produce a nil → value transition")
+        XCTAssertEqual(log.lastRedoneAlbumName, "Vacation")
+    }
+
+    // MARK: - by-id migration: routing
+
+    func testUndoUsesAlbumIDWhenAvailable_titleFallbackWhenNot() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        // Legacy in-memory decision (no albumLocalIdentifier) → fallback to title.
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: nil)
+        await log.undo()
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].surface, .byName,
+                       "Legacy decision without albumLocalIdentifier must fall back to by-name remove")
+        XCTAssertEqual(mock.calls[0].target, "Vacation")
+
+        // New decision with an id → by-id surface.
+        mock.calls.removeAll()
+        log.record(asset: asset, albumName: "Family", albumLocalIdentifier: "album-id-fam")
+        await log.undo()
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].surface, .byID,
+                       "Decision carrying albumLocalIdentifier must route through by-id remove")
+        XCTAssertEqual(mock.calls[0].target, "album-id-fam")
+    }
+
+    func testRedoUsesAlbumIDWhenAvailable_titleFallbackWhenNot() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: nil)
+        await log.undo()
+        mock.calls.removeAll()
+        await log.redo()
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].kind, .assign)
+        XCTAssertEqual(mock.calls[0].surface, .byName)
+        XCTAssertEqual(mock.calls[0].target, "Vacation")
+
+        log = DecisionLog(operations: mock)
+        mock.calls.removeAll()
+        log.record(asset: asset, albumName: "Family", albumLocalIdentifier: "album-id-fam")
+        await log.undo()
+        mock.calls.removeAll()
+        await log.redo()
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].kind, .assign)
+        XCTAssertEqual(mock.calls[0].surface, .byID)
+        XCTAssertEqual(mock.calls[0].target, "album-id-fam")
+    }
+
+    // MARK: - duplicate-name regression
+
+    func testUndoOnDuplicateNamedAlbums_targetsTheOriginalCollection() async {
+        // Two albums share the title "Vacation" but have distinct local
+        // identifiers. The decision was recorded against `album-A`; the undo
+        // must route to `album-A` regardless of which collection the title
+        // lookup would resolve to.
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-A")
+        await log.undo()
+        XCTAssertEqual(mock.calls.count, 1)
+        XCTAssertEqual(mock.calls[0].surface, .byID)
+        XCTAssertEqual(mock.calls[0].target, "album-A",
+                       "Undo must target the original album by id, never the duplicate-named sibling")
+        // The title is NOT used as the target — confirm it never appears.
+        XCTAssertNotEqual(mock.calls[0].target, "Vacation")
+    }
+}
+
+// MARK: - Transition spy for toast contract
+
+/// An `AlbumOperations` mock that runs a `@MainActor` callback the instant an
+/// operation is invoked, so tests can observe the DecisionLog's
+/// `lastUndoneAlbumName` / `lastRedoneAlbumName` *during* the operation
+/// (the nil reset window).
+final class TransitionSpyAlbumOperations: AlbumOperations {
+    private let onCall: @MainActor () -> Void
+
+    init(onCall: @escaping @MainActor () -> Void) {
+        self.onCall = onCall
+    }
+
+    func assign(_ asset: PHAsset, toAlbumNamed name: String) async -> Bool {
+        await MainActor.run { onCall() }
+        return true
+    }
+
+    func assign(_ asset: PHAsset, toAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        await MainActor.run { onCall() }
+        return true
+    }
+
+    func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool {
+        await MainActor.run { onCall() }
+        return true
+    }
+
+    func remove(_ asset: PHAsset, fromAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        await MainActor.run { onCall() }
+        return true
     }
 }
 

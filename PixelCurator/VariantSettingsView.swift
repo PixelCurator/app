@@ -55,7 +55,7 @@ struct VariantSettingsView: View {
 
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(variant.displayName)
+                Text(LocalizedStringKey(variant.displayName))
                     .font(.body)
                 if variant.tier == .free {
                     Text("Free")

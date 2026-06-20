@@ -53,7 +53,7 @@ struct SortingInboxView: View {
                     reviewCard
                 }
             }
-            .navigationTitle("Sorting Inbox")
+            .navigationTitle("Light Table")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -379,7 +379,7 @@ struct SortingInboxView: View {
             Image(systemName: "tray")
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
-            Text("Inbox Zero")
+            Text("All Sorted")
                 .font(.title2.bold())
             Text("All indexed photos are already sorted into albums. Keep indexing more photos to get suggestions here.")
                 .font(.callout)
@@ -497,7 +497,11 @@ private struct SuggestionChip: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.albumTitle)
                         .font(.body.weight(.medium))
-                    Text("\(Int(suggestion.score * 100))% · \(suggestion.supportingCount) similar")
+                    // Percent is `verbatim` (locale-neutral, avoids a bare `%`
+                    // in a localized format key); only the count phrase is
+                    // localized ("%lld similar" → "%lld ähnlich").
+                    (Text(verbatim: "\(Int(suggestion.score * 100))% · ")
+                        + Text("\(suggestion.supportingCount) similar"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

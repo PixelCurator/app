@@ -51,7 +51,7 @@ struct PhotoGridView: View {
                             // Image) so it renders no separate accessibility image
                             // element above the grid — otherwise `app.images`
                             // queries would match it instead of a grid thumbnail.
-                            Text("\(Image(systemName: "tray.full"))  Sort \(unsortedCount) photo\(unsortedCount == 1 ? "" : "s") →")
+                            Text("\(unsortedCount) photos to sort →")
                                 .fontWeight(.medium)
                             Spacer()
                         }

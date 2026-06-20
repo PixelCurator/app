@@ -38,6 +38,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_ENTITLEMENTS: PixelCurator/PixelCurator.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Apple requires this Info.plist key when icons live in an asset
+        # catalog (iOS 11+). Without it, the upload fails ITMS-90713 and
+        # Apple falls back to looking for legacy 120x120 / 152x152 PNGs
+        # outside the catalog (ITMS-90022 / 90023).
+        INFOPLIST_KEY_CFBundleIconName: AppIcon
+        # iPad multitasking requires explicit orientation declaration
+        # (ITMS-90474). Allow all four — the photo grid + sort + albums
+        # views all reflow cleanly across rotations.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
         # Photo library usage strings (written into the generated Info.plist)

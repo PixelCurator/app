@@ -445,6 +445,91 @@ final class DecisionLogSideEffectTests: XCTestCase {
         XCTAssertEqual(mock.calls[0].target, "album-id-fam")
     }
 
+    // MARK: - lastUndoError / lastRedoError (S-5)
+
+    /// A single undo failure must surface `lastUndoError` and roll the entry
+    /// back onto the undo stack so the user can retry.
+    func testUndoFailure_setsLastUndoError() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        mock.removeShouldSucceed = false
+
+        await log.undo()
+
+        XCTAssertNotNil(log.lastUndoError,
+                       "First undo failure must surface lastUndoError so the toast fires")
+        XCTAssertTrue(log.canUndo, "Entry must stay on the undo stack for retry")
+    }
+
+    /// Two consecutive failures of the *same* undo entry must drop the entry
+    /// so `canUndo` no longer lies — the album is presumed permanently broken.
+    func testUndoFailureTwiceForSameEntry_dropsEntry() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        mock.removeShouldSucceed = false
+
+        await log.undo()
+        XCTAssertTrue(log.canUndo, "First failure: entry rolled back for retry")
+
+        await log.undo()
+        XCTAssertFalse(log.canUndo,
+                       "Second failure of the same entry must drop it so canUndo reflects reality")
+        XCTAssertNotNil(log.lastUndoError,
+                       "The drop must still set lastUndoError so the user sees a toast")
+    }
+
+    /// A successful undo following a failed undo must clear `lastUndoError` so
+    /// the toast doesn't fire spuriously.
+    func testUndoSuccess_clearsLastUndoError() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        mock.removeShouldSucceed = false
+        await log.undo()
+        XCTAssertNotNil(log.lastUndoError)
+
+        mock.removeShouldSucceed = true
+        await log.undo()
+        XCTAssertNil(log.lastUndoError)
+        XCTAssertEqual(log.lastUndoneAlbumName, "Vacation")
+    }
+
+    /// Symmetric drop-on-persistent-failure for redo.
+    func testRedoFailureTwiceForSameEntry_dropsEntry() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        await log.undo()
+        XCTAssertTrue(log.canRedo)
+
+        mock.assignShouldSucceed = false
+        await log.redo()
+        XCTAssertTrue(log.canRedo, "First failure: entry rolled back for retry")
+
+        await log.redo()
+        XCTAssertFalse(log.canRedo,
+                       "Second redo failure of the same entry must drop it")
+        XCTAssertNotNil(log.lastRedoError)
+    }
+
+    /// Recording a fresh decision after a failure clears `lastUndoError` so
+    /// stale failure context doesn't bleed into a new session.
+    func testRecord_clearsLastUndoErrorAndFailureTracking() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-id-1")
+        mock.removeShouldSucceed = false
+        await log.undo()
+        XCTAssertNotNil(log.lastUndoError)
+
+        log.record(asset: asset, albumName: "Family", albumLocalIdentifier: "album-id-2")
+        XCTAssertNil(log.lastUndoError, "record() must clear lastUndoError")
+
+        // And the per-entry failure counter must reset too — the first failure
+        // on the new entry should roll back (not drop) even after a previous
+        // failure existed for the prior entry.
+        await log.undo()
+        XCTAssertTrue(log.canUndo,
+                       "Fresh record's first failure must roll back (drop counter reset by record())")
+    }
+
     // MARK: - duplicate-name regression
 
     func testUndoOnDuplicateNamedAlbums_targetsTheOriginalCollection() async {

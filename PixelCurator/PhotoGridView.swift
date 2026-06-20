@@ -29,6 +29,7 @@ struct PhotoGridView: View {
 
     @Environment(\.sortingCoordinator) private var sortingCoordinator
     @Environment(\.decisionLog) private var decisionLog
+    @Environment(\.isSwitchingVariant) private var isSwitchingVariant
 
     @State private var selectedAsset: PHAsset?
     @State private var assignAssetItem: IdentifiableAsset?
@@ -105,6 +106,10 @@ struct PhotoGridView: View {
                             await decisionLog?.undo()
                             if let name = decisionLog?.lastUndoneAlbumName {
                                 await showToast("Removed from \(name)")
+                            } else if let error = decisionLog?.lastUndoError {
+                                // Surface the failure — otherwise the user
+                                // sees nothing and assumes Undo is broken.
+                                await showToast(error)
                             }
                         }
                     } label: {
@@ -157,6 +162,13 @@ struct PhotoGridView: View {
                 // Kick off background indexing once assets are loaded.
                 // The indexer's skip-set makes re-runs idempotent — already-indexed
                 // assets are skipped quickly without re-embedding.
+                //
+                // Gate on `isSwitchingVariant`: during a variant switch the
+                // env-injected `indexer` is still the prior instance until
+                // `bootIndexer` finishes, so calling `index(assets:)` here
+                // would target the about-to-be-discarded indexer, race its
+                // trailing `context.save()`, and confuse the new one.
+                guard !isSwitchingVariant else { return }
                 guard let indexer, !library.assets.isEmpty else { return }
                 if !indexer.isIndexing {
                     await indexer.index(assets: library.assets)

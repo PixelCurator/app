@@ -1,12 +1,33 @@
 @preconcurrency import Photos
 import SwiftUI
 
+// MARK: - AssignResolving (testable seam for SortingCoordinator)
+
+/// A narrow protocol that exposes only the surface `SortingCoordinator` needs
+/// to drive accept / assignTo / batchAssign paths: the resolving assign call
+/// and the most recent error message.
+///
+/// Kept separate from `AlbumOperations` (which abstracts undo/redo side
+/// effects) so neither mock has to implement the other's surface — the two
+/// concerns are independent and tests for one path shouldn't drag in the
+/// other. `AlbumManager` conforms to both.
+@MainActor
+protocol AssignResolving: AnyObject {
+    /// Adds an asset to a named album (creating it if missing) and returns
+    /// the resolved album `localIdentifier` together with whether the add was
+    /// a no-op because the asset was already a member.
+    func assignAndResolve(_ asset: PHAsset, toAlbumNamed name: String) async -> AlbumManager.AssignResult
+
+    /// Error from the most recent assign operation, or `nil` on success.
+    var lastError: String? { get }
+}
+
 /// Reads and writes Photos.app albums via PhotoKit — the iOS/macOS replacement
 /// for the Python `photoscript` layer. Writing an asset into an album here makes
 /// it appear in the real Photos.app, which is the core "commit" operation.
 @MainActor
 @Observable
-final class AlbumManager: AlbumOperations {
+final class AlbumManager: AlbumOperations, AssignResolving {
 
     struct Album: Identifiable, Hashable {
         let id: String          // localIdentifier

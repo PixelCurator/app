@@ -201,6 +201,46 @@
         }
       }
     },
+    "iCloud only": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur in iCloud"
+          }
+        }
+      }
+    },
+    "iCloud-only photos appear with the iCloud badge but cannot be analyzed for album suggestions until downloaded in Photos.app.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud-Fotos werden mit dem iCloud-Symbol angezeigt, können aber erst dann für Albumvorschläge analysiert werden, wenn du sie in Fotos.app heruntergeladen hast."
+          }
+        }
+      }
+    },
+    "Settings": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen"
+          }
+        }
+      }
+    },
+    "Show iCloud photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud-Fotos anzeigen"
+          }
+        }
+      }
+    },
     "Finding similar photos…": {
       "localizations": {
         "de": {

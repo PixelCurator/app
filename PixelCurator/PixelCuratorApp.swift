@@ -71,6 +71,16 @@ struct PixelCuratorApp: App {
         .defaultSize(width: 900, height: 700)
         #endif
         .modelContainer(modelContainer)
+
+        #if os(macOS)
+        // Native macOS Settings scene — accessible via Cmd-, by default. The
+        // same `@AppStorage("hideICloudPhotos")` key is read by `PhotoGridView`,
+        // which mirrors it into `PhotoController.hideICloudPhotos`, so flipping
+        // the toggle here propagates to the grid filter on the next render.
+        Settings {
+            AppSettingsView()
+        }
+        #endif
     }
 
     // MARK: - Boot

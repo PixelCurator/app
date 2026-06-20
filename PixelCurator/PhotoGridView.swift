@@ -36,7 +36,14 @@ struct PhotoGridView: View {
     @State private var similarAssetItem: IdentifiableAsset?
     @State private var toast: String?
     @State private var showVariantSettings = false
+    @State private var showAppSettings = false
     @State private var unsortedCount: Int = 0
+
+    /// Mirrors into `PhotoController.hideICloudPhotos` so the controller can
+    /// produce a pre-filtered `visibleAssets` array. The macOS `Settings` scene
+    /// reads the same `@AppStorage` key, so toggling it from Cmd-, or from the
+    /// iOS sheet both end up flipping the controller's filter.
+    @AppStorage("hideICloudPhotos") private var hideICloudPhotos: Bool = false
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
@@ -64,7 +71,7 @@ struct PhotoGridView: View {
                     .accessibilityIdentifier("inbox-cta")
                 }
                 LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(library.assets, id: \.localIdentifier) { asset in
+                    ForEach(library.visibleAssets, id: \.localIdentifier) { asset in
                         ThumbnailCell(asset: asset)
                             .aspectRatio(1, contentMode: .fill)
                             .clipped()
@@ -92,6 +99,16 @@ struct PhotoGridView: View {
                         indexingProgressView(indexer: indexer)
                     }
                 }
+                #if os(iOS)
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showAppSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("toolbar-app-settings")
+                }
+                #endif
                 ToolbarItem(placement: .automatic) {
                     Button {
                         showVariantSettings = true
@@ -146,6 +163,27 @@ struct PhotoGridView: View {
                     entitlements: entitlementProvider,
                     onVariantChange: switchVariant
                 )
+            }
+            #if os(iOS)
+            .sheet(isPresented: $showAppSettings) {
+                NavigationStack {
+                    AppSettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showAppSettings = false }
+                            }
+                        }
+                }
+            }
+            #endif
+            .onAppear {
+                // Mirror the persisted toggle into the controller so its
+                // `visibleAssets` derived value sees the current setting on
+                // first render. The `.onChange` below handles subsequent flips.
+                library.hideICloudPhotos = hideICloudPhotos
+            }
+            .onChange(of: hideICloudPhotos) { _, newValue in
+                library.hideICloudPhotos = newValue
             }
             .sheet(item: $similarAssetItem) { item in
                 if let search {
@@ -339,6 +377,21 @@ private struct ThumbnailCell: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .overlay(alignment: .topTrailing) {
+                // Subtle iCloud affordance — only present for iCloud-only
+                // assets. Lookup is O(1) against the controller's cached
+                // `cloudOnlyAssetIDs` so this stays cheap on a large grid.
+                if library.isCloudOnly(asset) {
+                    Image(systemName: "icloud.and.arrow.down")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(4)
+                        .background(.black.opacity(0.4), in: Circle())
+                        .padding(4)
+                        .accessibilityLabel("iCloud only")
+                        .accessibilityIdentifier("cell-icloud-badge")
+                }
+            }
             .task(id: asset.localIdentifier) {
                 let scale = 2.0
                 let target = CGSize(width: geo.size.width * scale,

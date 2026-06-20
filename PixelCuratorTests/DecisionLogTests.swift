@@ -532,6 +532,99 @@ final class DecisionLogSideEffectTests: XCTestCase {
 
     // MARK: - duplicate-name regression
 
+    // MARK: - prune(keepingAssets:livingAlbumIDs:) (B-2)
+
+    /// Decisions whose asset is no longer in the live set must be dropped from
+    /// **both** stacks — never requeued. The existing rollback path is for
+    /// transient errors; an asset deleted in Photos.app can never replay.
+    func testPruneDropsDecisionsForDeletedAssets() async {
+        let a1 = StubPHAsset(localIdentifier: "asset-alive")
+        let a2 = StubPHAsset(localIdentifier: "asset-dead")
+        let a3 = StubPHAsset(localIdentifier: "asset-alive-redo")
+
+        log.record(asset: a1, albumName: "Vacation", albumLocalIdentifier: "album-1")
+        log.record(asset: a2, albumName: "Vacation", albumLocalIdentifier: "album-1")
+        log.record(asset: a3, albumName: "Family",   albumLocalIdentifier: "album-2")
+        // Push the latter two onto redo.
+        await log.undo()
+        await log.undo()
+
+        // asset-dead was deleted in Photos.app.
+        let dropped = log.prune(
+            keepingAssets: ["asset-alive", "asset-alive-redo"],
+            livingAlbumIDs: ["album-1", "album-2"]
+        )
+        XCTAssertEqual(dropped, 1, "Only the dead-asset decision should be removed")
+        XCTAssertEqual(log.undoStack.map(\.asset.localIdentifier), ["asset-alive"])
+        XCTAssertEqual(log.redoStack.map(\.asset.localIdentifier), ["asset-alive-redo"])
+    }
+
+    /// Decisions whose `albumLocalIdentifier` is no longer in the live album
+    /// set must be dropped from both stacks.
+    func testPruneDropsDecisionsForDeletedAlbums() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Keep",   albumLocalIdentifier: "album-alive")
+        log.record(asset: asset, albumName: "Gone",   albumLocalIdentifier: "album-dead")
+
+        let dropped = log.prune(
+            keepingAssets: ["asset-1"],
+            livingAlbumIDs: ["album-alive"]
+        )
+        XCTAssertEqual(dropped, 1)
+        XCTAssertEqual(log.undoStack.count, 1)
+        XCTAssertEqual(log.undoStack.first?.albumLocalIdentifier, "album-alive")
+    }
+
+    /// Legacy decisions without an `albumLocalIdentifier` (in-memory only)
+    /// must survive even when their album title cannot be cross-referenced —
+    /// they'll fall back to title-based resolution at replay time.
+    func testPruneKeepsLegacyDecisionsWithoutAlbumID() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Legacy", albumLocalIdentifier: nil)
+
+        let dropped = log.prune(
+            keepingAssets: ["asset-1"],
+            livingAlbumIDs: []   // no live albums at all
+        )
+        XCTAssertEqual(dropped, 0,
+                       "Decisions without an albumLocalIdentifier must survive the prune")
+        XCTAssertEqual(log.undoStack.count, 1)
+    }
+
+    /// A pruned decision must not be silently requeued — `canUndo` must drop
+    /// to false when the only undo entry is pruned.
+    func testPruneDoesNotRequeueDroppedEntries() async {
+        let asset = StubPHAsset(localIdentifier: "asset-dead")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-1")
+        XCTAssertTrue(log.canUndo)
+
+        let dropped = log.prune(keepingAssets: [], livingAlbumIDs: ["album-1"])
+        XCTAssertEqual(dropped, 1)
+        XCTAssertFalse(log.canUndo,
+                       "Dropped entries must not come back — drop, do NOT requeue")
+        XCTAssertFalse(log.canRedo)
+    }
+
+    /// Pruning must reset the per-entry failure-tracking ids so a fresh record
+    /// after the cascade is not mistaken for the previously-failed decision.
+    func testPruneResetsFailureTrackingWhenEntriesDropped() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.record(asset: asset, albumName: "Vacation", albumLocalIdentifier: "album-1")
+        mock.removeShouldSucceed = false
+        await log.undo()  // first failure: rolled back, lastFailedUndoID set to this decision id
+
+        // The asset is then deleted in Photos.app and the cascade fires.
+        log.prune(keepingAssets: [], livingAlbumIDs: ["album-1"])
+
+        // Record a brand-new decision; even if it fails, that first failure
+        // should be a rollback (not a drop) because the tracker was reset.
+        let asset2 = StubPHAsset(localIdentifier: "asset-2")
+        log.record(asset: asset2, albumName: "Family", albumLocalIdentifier: "album-2")
+        await log.undo()
+        XCTAssertTrue(log.canUndo,
+                      "After prune, a new decision's first failure must roll back, not drop")
+    }
+
     func testUndoOnDuplicateNamedAlbums_targetsTheOriginalCollection() async {
         // Two albums share the title "Vacation" but have distinct local
         // identifiers. The decision was recorded against `album-A`; the undo
@@ -664,6 +757,47 @@ final class DecisionLogAlgorithmTests: XCTestCase {
     func testRedoOnEmptyStackIsNoop() {
         var stack = UndoRedoStack<FakeDecision>()
         XCTAssertNil(stack.popRedo())
+        XCTAssertFalse(stack.canRedo)
+    }
+
+    // MARK: - Prune mechanics
+
+    func testPruneDropsEntriesAcrossBothStacks() {
+        var stack = UndoRedoStack<FakeDecision>()
+        stack.record(FakeDecision(assetID: "a1", albumName: "Keep"))
+        stack.record(FakeDecision(assetID: "a2", albumName: "Drop"))
+        stack.record(FakeDecision(assetID: "a3", albumName: "Keep"))
+
+        // Move two onto the redo stack.
+        let u3 = stack.popUndo()!; stack.pushRedo(u3)
+        let u2 = stack.popUndo()!; stack.pushRedo(u2)
+
+        // a2 (Drop) lives once on redo. Prune drops anything not in the keep set.
+        let alive: Set<String> = ["a1", "a3"]
+        let dropped = stack.prune { alive.contains($0.assetID) }
+        XCTAssertEqual(dropped, 1)
+        XCTAssertEqual(stack.undoStack.map(\.assetID), ["a1"])
+        XCTAssertEqual(stack.redoStack.map(\.assetID), ["a3"])
+    }
+
+    func testPruneNoopWhenAllAlive() {
+        var stack = UndoRedoStack<FakeDecision>()
+        stack.record(FakeDecision(assetID: "a1", albumName: "A"))
+        stack.record(FakeDecision(assetID: "a2", albumName: "B"))
+        let dropped = stack.prune { _ in true }
+        XCTAssertEqual(dropped, 0)
+        XCTAssertEqual(stack.undoStack.count, 2)
+    }
+
+    func testPruneEverythingDropsBothStacks() {
+        var stack = UndoRedoStack<FakeDecision>()
+        stack.record(FakeDecision(assetID: "a1", albumName: "A"))
+        stack.record(FakeDecision(assetID: "a2", albumName: "B"))
+        let u = stack.popUndo()!; stack.pushRedo(u)
+
+        let dropped = stack.prune { _ in false }
+        XCTAssertEqual(dropped, 2)
+        XCTAssertFalse(stack.canUndo)
         XCTAssertFalse(stack.canRedo)
     }
 

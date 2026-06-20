@@ -81,4 +81,30 @@ struct CorrectionStore {
             context.delete(row)
         }
     }
+
+    /// Removes corrections whose `assetID` is not in `livingAssetIDs` or whose
+    /// `albumName` is not in `livingAlbumNames`, across **all** variants.
+    ///
+    /// Called from the library-change cascade so that a photo or album deleted
+    /// in Photos.app cannot keep voting as a labeled exemplar in
+    /// `AlbumSuggester`. Both predicates are joined with OR: a row whose asset
+    /// **or** album is gone is pruned. Album resolution uses `albumName`
+    /// because that is what corrections store; the live album-name set is
+    /// derived from `AlbumManager.albums.map(\.title)`.
+    ///
+    /// Returns the number of rows deleted. Does not call `context.save()`.
+    @discardableResult
+    func prune(
+        keepingAssetIDs livingAssetIDs: Set<String>,
+        livingAlbumNames: Set<String>
+    ) -> Int {
+        let all = (try? context.fetch(FetchDescriptor<AlbumCorrection>())) ?? []
+        var deleted = 0
+        for row in all where !livingAssetIDs.contains(row.assetID)
+                          || !livingAlbumNames.contains(row.albumName) {
+            context.delete(row)
+            deleted += 1
+        }
+        return deleted
+    }
 }

@@ -77,4 +77,28 @@ struct EmbeddingStore {
             context.delete(row)
         }
     }
+
+    /// Removes embeddings whose `assetID` is not in `livingAssetIDs`, across
+    /// **all** variants.
+    ///
+    /// Called when the Photos library reports a change (an asset was deleted
+    /// in Photos.app or removed from iCloud Shared Library) so that stale
+    /// embeddings cannot continue to vote in `AlbumSuggester` or surface as
+    /// ghost results in similarity search. The set is the union of every
+    /// `PHAsset.localIdentifier` currently visible to the app — anything else
+    /// is presumed permanently gone.
+    ///
+    /// Returns the number of rows deleted, for logging / test assertions. Does
+    /// not call `context.save()` — the caller owns the context's save cadence.
+    @discardableResult
+    func prune(keeping livingAssetIDs: Set<String>) -> Int {
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26.
+        let all = (try? context.fetch(FetchDescriptor<PhotoEmbedding>())) ?? []
+        var deleted = 0
+        for row in all where !livingAssetIDs.contains(row.assetID) {
+            context.delete(row)
+            deleted += 1
+        }
+        return deleted
+    }
 }

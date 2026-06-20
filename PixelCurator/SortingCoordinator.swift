@@ -27,6 +27,13 @@ final class SortingCoordinator {
     private var store: EmbeddingStore
     private var suggester: AlbumSuggester
     let albumManager: AlbumManager
+    /// Testable seam for the accept / assignTo / batchAssign paths. Defaults to
+    /// `albumManager` (which conforms to `AssignResolving`); tests inject a mock
+    /// to drive `.added`, `.alreadyMember`, and `.failed` returns without
+    /// touching PhotoKit. Kept separate from `albumManager` because the view
+    /// layer (`SortingInboxView`) still reads `coordinator.albumManager.albums`,
+    /// which is not part of any protocol surface.
+    private let assignResolver: any AssignResolving
     private let photoController: PhotoController
     /// `modelID` is mutable because `updateVariant(...)` rebinds the coordinator
     /// to a new variant's data sources without throwing away `decisionLog`
@@ -79,11 +86,15 @@ final class SortingCoordinator {
         photoController: PhotoController,
         modelID: String = CLIPVariant.bundledDefault.modelID,
         decisionLog: DecisionLog? = nil,
-        correctionStore: CorrectionStore? = nil
+        correctionStore: CorrectionStore? = nil,
+        assignResolver: (any AssignResolving)? = nil
     ) {
         self.store = store
         self.suggester = suggester
         self.albumManager = albumManager
+        // Default to the same AlbumManager instance — production wires both
+        // from one object. Tests pass a mock to drive AssignResult returns.
+        self.assignResolver = assignResolver ?? albumManager
         self.photoController = photoController
         self.modelID = modelID
         // If no DecisionLog is provided, create one backed by the shared albumManager.
@@ -152,6 +163,33 @@ final class SortingCoordinator {
         recomputeSuggestions()
     }
 
+    // MARK: - Test seam
+
+    /// Replaces the queue and resets the cursor to `index`. Test-only hook used
+    /// by `SortingCoordinatorTests` to drive accept / assignTo / batchAssign
+    /// without standing up PhotoController + EmbeddingStore + a real album set.
+    ///
+    /// Production code MUST NOT call this — `buildQueue()` is the only legitimate
+    /// path. Kept `internal` rather than wrapped in `#if DEBUG` because the
+    /// test target is built in Release for CI runs.
+    internal func _seedQueueForTesting(_ assets: [PHAsset], currentIndex index: Int = 0) {
+        queue = assets
+        currentIndex = max(0, min(index, assets.count))
+        isSorting = !queue.isEmpty
+        sortedCount = 0
+        currentSuggestions = []
+        lastAssignError = nil
+    }
+
+    /// Suppresses `recomputeSuggestions()` invocations. Test-only hook so the
+    /// assign-path tests can drive accept / assignTo / batchAssign without
+    /// triggering an `AlbumSuggester.suggestions(...)` call against a stub
+    /// `PHAsset` — `EmbeddingStore.embedding(...)` traps on iOS 26 simulator
+    /// SwiftData reads against the in-memory store, independent of row count
+    /// (see EmbeddingStore.swift:51's #Predicate-trap note). Production code
+    /// MUST NOT toggle this.
+    internal var _suppressSuggestionsForTesting: Bool = false
+
     // MARK: - Pure inbox filter (testable without PhotoKit)
 
     /// Returns the ordered subset of `allAssetIDs` that are both embedded and
@@ -179,7 +217,7 @@ final class SortingCoordinator {
     ///   corrections (user picks a *non-top* album) from confirmations.
     func accept(_ suggestion: AlbumSuggestion) async {
         guard let asset = current else { return }
-        let result = await albumManager.assignAndResolve(asset, toAlbumNamed: suggestion.albumTitle)
+        let result = await assignResolver.assignAndResolve(asset, toAlbumNamed: suggestion.albumTitle)
         switch result {
         case .added(let albumID):
             sortedCount += 1
@@ -201,7 +239,7 @@ final class SortingCoordinator {
         case .failed:
             // Stay on the current photo so a failed assign can be retried
             // instead of silently skipping the photo out of the session.
-            lastAssignError = albumManager.lastError
+            lastAssignError = assignResolver.lastError
         }
     }
 
@@ -214,7 +252,7 @@ final class SortingCoordinator {
     ///   M3-D distinguish a correction from a confirmation.
     func assignTo(albumNamed name: String) async {
         guard let asset = current else { return }
-        let result = await albumManager.assignAndResolve(asset, toAlbumNamed: name)
+        let result = await assignResolver.assignAndResolve(asset, toAlbumNamed: name)
         switch result {
         case .added(let albumID):
             sortedCount += 1
@@ -231,7 +269,7 @@ final class SortingCoordinator {
         case .failed:
             // Stay on the current photo so a failed assign can be retried
             // instead of silently skipping the photo out of the session.
-            lastAssignError = albumManager.lastError
+            lastAssignError = assignResolver.lastError
         }
     }
 
@@ -255,7 +293,7 @@ final class SortingCoordinator {
     func batchAssign(_ assets: [PHAsset], toAlbumNamed name: String) async -> Int {
         var assignedIDs = Set<String>()
         for asset in assets {
-            let result = await albumManager.assignAndResolve(asset, toAlbumNamed: name)
+            let result = await assignResolver.assignAndResolve(asset, toAlbumNamed: name)
             switch result {
             case .added(let albumID):
                 assignedIDs.insert(asset.localIdentifier)
@@ -268,7 +306,11 @@ final class SortingCoordinator {
                 // re-make a choice the suggester needs to learn from.
                 assignedIDs.insert(asset.localIdentifier)
             case .failed:
-                lastAssignError = albumManager.lastError
+                // Continue past failure: keep processing the rest of the batch
+                // so a single broken asset doesn't strand the others. Failed
+                // assets stay in the queue; the surfaced error gives the user
+                // a chance to retry them individually.
+                lastAssignError = assignResolver.lastError
             }
         }
         guard !assignedIDs.isEmpty else { return 0 }
@@ -341,6 +383,7 @@ final class SortingCoordinator {
     }
 
     private func recomputeSuggestions() {
+        if _suppressSuggestionsForTesting { return }
         guard let asset = current else {
             currentSuggestions = []
             return

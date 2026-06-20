@@ -94,6 +94,24 @@ actor Embedder {
     }
 }
 
+// MARK: - Image embedding seam
+
+/// Minimal embedding contract that `EmbeddingIndexer` (and other consumers)
+/// depend on instead of the concrete `Embedder` actor.
+///
+/// Carved out so tests can substitute a deterministic in-process fake without
+/// loading the bundled Core ML model. Production code paths continue to pass
+/// an `Embedder` instance — it conforms below.
+protocol ImageEmbedding: Actor {
+    /// Dimensionality of the embedding vectors this implementation produces.
+    nonisolated var embeddingDimension: Int { get }
+
+    /// Embeds `cgImage` and returns an L2-normalised vector.
+    func embed(_ cgImage: CGImage) async throws -> [Float]
+}
+
+extension Embedder: ImageEmbedding {}
+
 // MARK: - Errors
 
 enum EmbedderError: Error, LocalizedError {

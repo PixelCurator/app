@@ -41,27 +41,54 @@ final class EmbeddingIndexer {
     // MARK: - Dependencies
 
     private let context: ModelContext
-    private let embedder: Embedder
+    private let embedder: any ImageEmbedding
     private let modelStore: ModelStore
     private let variant: CLIPVariant
+    private let cgImageProvider: CGImageProviding
+    private let alreadyIndexedAssetIDs: @MainActor (String) -> Set<String>
 
     // MARK: - Init
 
     /// - Parameters:
     ///   - context: A `ModelContext` bound to a container that includes `PhotoEmbedding.self`.
-    ///   - embedder: Pre-loaded `Embedder` actor for the chosen variant.
+    ///   - embedder: Pre-loaded image-embedding actor for the chosen variant.
+    ///     Production callers pass an `Embedder`; tests can substitute any
+    ///     `ImageEmbedding`-conforming actor.
     ///   - modelStore: `ModelStore` instance (unused at runtime in Slice B, reserved for future variant switching).
     ///   - variant: The `CLIPVariant` whose `modelID` tags every stored embedding.
+    ///   - cgImageProvider: Pixel-delivery seam. Defaults to the production
+    ///     PhotoKit-backed implementation; tests inject a stub that returns a
+    ///     synthetic image so the run-loop's skip-on-nil branch is bypassed.
+    ///   - alreadyIndexedAssetIDs: Lookup that returns the asset IDs already
+    ///     embedded for a given `modelID`. Defaults to a `FetchDescriptor`
+    ///     read via `EmbeddingStore`. Tests override this because the
+    ///     production fetch signal-traps against an in-memory SwiftData store
+    ///     on iOS 26 / macOS 26 (see the equivalent escape hatch in
+    ///     `SortingCoordinator._suppressSuggestionsForTesting`).
     init(
         context: ModelContext,
-        embedder: Embedder,
+        embedder: any ImageEmbedding,
         modelStore: ModelStore,
-        variant: CLIPVariant = .bundledDefault
+        variant: CLIPVariant = .bundledDefault,
+        cgImageProvider: CGImageProviding = PhotoKitCGImageProvider(),
+        alreadyIndexedAssetIDs: (@MainActor (String) -> Set<String>)? = nil
     ) {
         self.context = context
         self.embedder = embedder
         self.modelStore = modelStore
         self.variant = variant
+        self.cgImageProvider = cgImageProvider
+        // Default reads through `EmbeddingStore` so production behaviour is
+        // unchanged. The closure captures `context` so the store is created
+        // lazily at run-time, matching the previous in-`runIndex` allocation.
+        if let alreadyIndexedAssetIDs {
+            self.alreadyIndexedAssetIDs = alreadyIndexedAssetIDs
+        } else {
+            let capturedContext = context
+            self.alreadyIndexedAssetIDs = { modelID in
+                EmbeddingStore(context: capturedContext).embeddedAssetIDs(modelID: modelID)
+            }
+        }
     }
 
     // MARK: - Indexing
@@ -126,9 +153,15 @@ final class EmbeddingIndexer {
         isIndexing = true
         _cancelRequested = false
 
-        let store = EmbeddingStore(context: context)
-        let alreadyIndexed = store.embeddedAssetIDs(modelID: variant.modelID)
+        // Route the "already indexed" lookup through the injected closure so
+        // tests can substitute an empty / stubbed answer. The production
+        // default reads via `EmbeddingStore(context:).embeddedAssetIDs(modelID:)`,
+        // which SIGTRAPs against an in-memory SwiftData store on iOS 26 /
+        // macOS 26 — see N-7 in the backlog. The closure indirection keeps
+        // production behaviour unchanged while letting tests bypass the trap.
+        let alreadyIndexed = alreadyIndexedAssetIDs(variant.modelID)
         let pending = assets.filter { !alreadyIndexed.contains($0.localIdentifier) }
+        let store = EmbeddingStore(context: context)
 
         total = pending.count
         indexed = 0
@@ -137,7 +170,7 @@ final class EmbeddingIndexer {
             // Respect both explicit cancellation and Swift structured-concurrency cancellation.
             if _cancelRequested || Task.isCancelled { break }
 
-            guard let cgImage = await fetchCGImage(for: asset) else {
+            guard let cgImage = await cgImageProvider.cgImage(for: asset) else {
                 print("EmbeddingIndexer: could not fetch CGImage for \(asset.localIdentifier), skipping")
                 continue
             }
@@ -164,12 +197,26 @@ final class EmbeddingIndexer {
         isIndexing = false
     }
 
-    // MARK: - Private helpers
+}
 
-    /// Fetches a `CGImage` for `asset` at 384×384 using a one-shot high-quality request.
-    ///
-    /// Network access is disabled — inference runs on locally cached copies only.
-    private func fetchCGImage(for asset: PHAsset) async -> CGImage? {
+// MARK: - CGImage delivery seam
+
+/// Source of `CGImage`s for indexing.
+///
+/// Production uses `PhotoKitCGImageProvider`, which wraps `PHImageManager`.
+/// Tests inject a stub that synthesises pixels so the indexer's run-loop runs
+/// without touching the asset library.
+protocol CGImageProviding: Sendable {
+    func cgImage(for asset: PHAsset) async -> CGImage?
+}
+
+/// PhotoKit-backed `CGImageProviding`.
+///
+/// Fetches a `CGImage` for `asset` at 384×384 using a one-shot high-quality
+/// request. Network access is disabled — inference runs on locally cached
+/// copies only.
+struct PhotoKitCGImageProvider: CGImageProviding {
+    func cgImage(for asset: PHAsset) async -> CGImage? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat

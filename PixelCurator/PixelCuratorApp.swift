@@ -87,6 +87,13 @@ struct PixelCuratorApp: App {
             sharedDecisionLog = DecisionLog(operations: albums)
         }
 
+        // Wire the library-change cascade once. The handler captures the
+        // single ModelContainer's mainContext so prune touches the same store
+        // every other service writes to (see the `modelContainer` declaration
+        // for why per-service containers trap). Set unconditionally each boot
+        // so the closure keeps referring to the still-current `sharedDecisionLog`.
+        installLibraryChangeCascade()
+
         do {
             let modelURL = try await ModelStore.compiledModelURL(for: variant)
             let embedder = try await Embedder(modelURL: modelURL)
@@ -171,6 +178,66 @@ struct PixelCuratorApp: App {
             // constructing the replacement against the same ModelContext.
             await priorIndexer?.cancelAndWait()
             await bootIndexer(variant: variant)
+        }
+    }
+
+    // MARK: - Library-change cascade (B-2)
+
+    /// Wires `PhotoController.onLibraryDidChange` so that a change observed in
+    /// Photos.app (or iCloud Shared Library) cascades through:
+    ///
+    ///   1. `AlbumManager.loadAlbums()` — refresh the album list off the new
+    ///       PHFetchResult; `PhotoController` already refreshed the asset list.
+    ///   2. `EmbeddingStore.prune(keeping:)` — drop embeddings for deleted
+    ///       assets across all variants.
+    ///   3. `CorrectionStore.prune(...)` — drop corrections for deleted assets
+    ///       and corrections pointing at deleted albums (by title).
+    ///   4. `DecisionLog.prune(keepingAssets:livingAlbumIDs:)` — drop undo and
+    ///       redo entries whose asset or album-by-id is gone.
+    ///   5. `context.save()` — persist the prune so a relaunch doesn't see
+    ///       resurrected rows.
+    ///
+    /// The closure captures `self` weakly through the dependency view; the
+    /// `library` controller holds the strong reference, so cycle risk is one
+    /// way only and cleared on app teardown.
+    @MainActor
+    private func installLibraryChangeCascade() {
+        let context = modelContainer.mainContext
+        let embeddings = EmbeddingStore(context: context)
+        let corrections = CorrectionStore(context: context)
+        // Capture `library` and `albums` weakly: each retains its own
+        // `onLibraryDidChange` closure, so a strong capture would create a
+        // retain cycle. `sharedDecisionLog` is captured weakly for symmetry —
+        // if the log is ever recreated the cascade should pick up the new one
+        // via the next `installLibraryChangeCascade` rather than fire on a
+        // stale instance.
+        library.onLibraryDidChange = { [weak library, weak albums, weak sharedDecisionLog] in
+            guard let library, let albums else { return }
+            // Reload albums first so the prune sees current state. PhotoController
+            // already reloaded `assets` before invoking this callback.
+            albums.loadAlbums()
+
+            let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
+            let livingAlbumIDs = Set(albums.albums.map(\.id))
+            let livingAlbumNames = Set(albums.albums.map(\.title))
+
+            embeddings.prune(keeping: livingAssetIDs)
+            corrections.prune(
+                keepingAssetIDs: livingAssetIDs,
+                livingAlbumNames: livingAlbumNames
+            )
+            sharedDecisionLog?.prune(
+                keepingAssets: livingAssetIDs,
+                livingAlbumIDs: livingAlbumIDs
+            )
+
+            // Persist the prune. Failing to save here means a relaunch could
+            // reload the now-pruned rows from disk.
+            do {
+                try context.save()
+            } catch {
+                print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
+            }
         }
     }
 }

@@ -144,14 +144,26 @@ final class SortingCoordinator {
     ///   corrections (user picks a *non-top* album) from confirmations.
     func accept(_ suggestion: AlbumSuggestion) async {
         guard let asset = current else { return }
-        let ok = await albumManager.assign(asset, toAlbumNamed: suggestion.albumTitle)
-        if ok {
+        let result = await albumManager.assignAndResolve(asset, toAlbumNamed: suggestion.albumTitle)
+        switch result {
+        case .added(let albumID):
             sortedCount += 1
             lastAssignError = nil
-            decisionLog.record(asset: asset, albumName: suggestion.albumTitle)
+            decisionLog.record(
+                asset: asset,
+                albumName: suggestion.albumTitle,
+                albumLocalIdentifier: albumID
+            )
             recordCorrectionIfNeeded(asset: asset, albumName: suggestion.albumTitle)
             advance()
-        } else {
+        case .alreadyMember:
+            // The asset is already in the target album — treat as success but
+            // do NOT record a phantom decision (S-1: assign idempotency).
+            sortedCount += 1
+            lastAssignError = nil
+            recordCorrectionIfNeeded(asset: asset, albumName: suggestion.albumTitle)
+            advance()
+        case .failed:
             // Stay on the current photo so a failed assign can be retried
             // instead of silently skipping the photo out of the session.
             lastAssignError = albumManager.lastError
@@ -167,14 +179,21 @@ final class SortingCoordinator {
     ///   M3-D distinguish a correction from a confirmation.
     func assignTo(albumNamed name: String) async {
         guard let asset = current else { return }
-        let ok = await albumManager.assign(asset, toAlbumNamed: name)
-        if ok {
+        let result = await albumManager.assignAndResolve(asset, toAlbumNamed: name)
+        switch result {
+        case .added(let albumID):
             sortedCount += 1
             lastAssignError = nil
-            decisionLog.record(asset: asset, albumName: name)
+            decisionLog.record(asset: asset, albumName: name, albumLocalIdentifier: albumID)
             recordCorrectionIfNeeded(asset: asset, albumName: name)
             advance()
-        } else {
+        case .alreadyMember:
+            // No-op assign — do not record a phantom undo entry (S-1).
+            sortedCount += 1
+            lastAssignError = nil
+            recordCorrectionIfNeeded(asset: asset, albumName: name)
+            advance()
+        case .failed:
             // Stay on the current photo so a failed assign can be retried
             // instead of silently skipping the photo out of the session.
             lastAssignError = albumManager.lastError
@@ -201,12 +220,19 @@ final class SortingCoordinator {
     func batchAssign(_ assets: [PHAsset], toAlbumNamed name: String) async -> Int {
         var assignedIDs = Set<String>()
         for asset in assets {
-            let ok = await albumManager.assign(asset, toAlbumNamed: name)
-            if ok {
+            let result = await albumManager.assignAndResolve(asset, toAlbumNamed: name)
+            switch result {
+            case .added(let albumID):
                 assignedIDs.insert(asset.localIdentifier)
-                decisionLog.record(asset: asset, albumName: name)
+                decisionLog.record(asset: asset, albumName: name, albumLocalIdentifier: albumID)
                 correctionStore?.record(assetID: asset.localIdentifier, albumName: name, modelID: modelID)
-            } else {
+            case .alreadyMember:
+                // Asset is already a member — count it as removed-from-queue
+                // (so it leaves the inbox) but do NOT record a phantom undo
+                // entry (S-1). Skip correction recording too: the user did not
+                // re-make a choice the suggester needs to learn from.
+                assignedIDs.insert(asset.localIdentifier)
+            case .failed:
                 lastAssignError = albumManager.lastError
             }
         }

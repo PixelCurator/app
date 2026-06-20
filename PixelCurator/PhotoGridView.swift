@@ -188,13 +188,27 @@ struct PhotoGridView: View {
     private func assign(to albumName: String) {
         guard let asset = selectedAsset else { return }
         Task {
-            let ok = await albums.assign(asset, toAlbumNamed: albumName)
-            if ok {
-                decisionLog?.record(asset: asset, albumName: albumName)
+            let result = await albums.assignAndResolve(asset, toAlbumNamed: albumName)
+            let ok: Bool
+            switch result {
+            case .added(let albumID):
+                decisionLog?.record(
+                    asset: asset,
+                    albumName: albumName,
+                    albumLocalIdentifier: albumID
+                )
                 // The photo is now in an album, so it leaves the sortable set —
                 // refresh the inbox count/CTA, which otherwise stays stale until
                 // the next indexing event.
                 unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
+                ok = true
+            case .alreadyMember:
+                // No-op — do not record a phantom undo entry (S-1). Still refresh
+                // the inbox count in case the cached state was stale.
+                unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
+                ok = true
+            case .failed:
+                ok = false
             }
             await showToast(ok ? "Added to \(albumName)" : (albums.lastError ?? "Failed"))
         }

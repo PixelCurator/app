@@ -73,6 +73,11 @@ final class AlbumManager: AlbumOperations {
     /// Removes an asset from a named album. Does not delete the album itself.
     /// Returns `false` (and sets `lastError`) if the album does not exist or the
     /// Photos change request fails.
+    ///
+    /// Note: Photos.app permits multiple albums to share the same title. When
+    /// the caller has the collection's `localIdentifier` available, prefer
+    /// `remove(_:fromAlbumWithID:)` to avoid mutating a sibling album that
+    /// happens to share the name.
     func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localizedTitle = %@", name)
@@ -81,6 +86,26 @@ final class AlbumManager: AlbumOperations {
             lastError = "Album \"\(name)\" not found."
             return false
         }
+        return await performRemove(asset, from: collection)
+    }
+
+    /// Removes an asset from the album identified by `albumLocalIdentifier`.
+    ///
+    /// Prefer this over `remove(_:fromAlbumNamed:)` whenever the album's
+    /// `localIdentifier` is available: Photos.app permits duplicate-named
+    /// albums and a title-based lookup may target the wrong collection.
+    func remove(_ asset: PHAsset, fromAlbumWithID albumLocalIdentifier: String) async -> Bool {
+        let result = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [albumLocalIdentifier], options: nil
+        )
+        guard let collection = result.firstObject else {
+            lastError = "Album not found."
+            return false
+        }
+        return await performRemove(asset, from: collection)
+    }
+
+    private func performRemove(_ asset: PHAsset, from collection: PHAssetCollection) async -> Bool {
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }

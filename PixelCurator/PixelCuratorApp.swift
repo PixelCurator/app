@@ -7,11 +7,20 @@ struct PixelCuratorApp: App {
     @State private var albums = AlbumManager()
     @State private var indexer: EmbeddingIndexer?
     @State private var similaritySearch: SimilaritySearch?
+
+    /// The app's **single** `SortingCoordinator`, allocated once on first boot
+    /// and rebound across variant switches via `updateVariant(...)`. Allocating
+    /// a fresh coordinator per variant switch would (a) silently wipe Undo
+    /// history (the per-coordinator `decisionLog` is brand-new) and (b) leave
+    /// any view that captured the prior reference holding an orphan.
     @State private var sortingCoordinator: SortingCoordinator?
 
     /// Shared DecisionLog for the grid's tap-to-assign undo flow.
-    /// SortingCoordinator owns its own internal log (separate history); a future
-    /// milestone can unify both logs into this one.
+    ///
+    /// Same instance as `sortingCoordinator.decisionLog` so the inbox toolbar's
+    /// Undo and the grid toolbar's Undo share one history — the previous
+    /// "future milestone can unify both logs" TODO is now closed at the seam
+    /// where the coordinator survives variant switches.
     @State private var sharedDecisionLog: DecisionLog?
 
     /// The active CLIP variant. Changing this triggers variant-switch orchestration.
@@ -55,6 +64,7 @@ struct PixelCuratorApp: App {
                 .environment(\.switchVariant, switchVariant(_:))
                 .environment(\.sortingCoordinator, sortingCoordinator)
                 .environment(\.decisionLog, sharedDecisionLog)
+                .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
         }
         #if os(macOS)
@@ -101,14 +111,30 @@ struct PixelCuratorApp: App {
             )
             self.activeVariant = variant
 
-            self.sortingCoordinator = SortingCoordinator(
-                store: EmbeddingStore(context: context),
-                suggester: AlbumSuggester(),
-                albumManager: albums,
-                photoController: library,
-                modelID: variant.modelID,
-                correctionStore: CorrectionStore(context: context)
-            )
+            // SortingCoordinator lives for the app's lifetime — only its data
+            // sources are swapped on variant switch. This preserves Undo
+            // history (decisionLog) and prevents views that captured the prior
+            // reference from holding an orphan after a switch.
+            let newStore = EmbeddingStore(context: context)
+            let newCorrectionStore = CorrectionStore(context: context)
+            if let coordinator = sortingCoordinator {
+                coordinator.updateVariant(
+                    store: newStore,
+                    suggester: AlbumSuggester(),
+                    correctionStore: newCorrectionStore,
+                    modelID: variant.modelID
+                )
+            } else {
+                self.sortingCoordinator = SortingCoordinator(
+                    store: newStore,
+                    suggester: AlbumSuggester(),
+                    albumManager: albums,
+                    photoController: library,
+                    modelID: variant.modelID,
+                    decisionLog: sharedDecisionLog,
+                    correctionStore: newCorrectionStore
+                )
+            }
         } catch {
             print("PixelCuratorApp: failed to boot indexer for \(variant.displayName): \(error)")
         }
@@ -163,6 +189,17 @@ private struct SwitchVariantKey: EnvironmentKey {
     static let defaultValue: (CLIPVariant) -> Void = { _ in }
 }
 
+/// `true` while a variant switch is in flight — the prior indexer's
+/// `cancelAndWait()` is pending, or `bootIndexer(variant:)` has not yet
+/// finished rebuilding services for the new variant. Views must gate
+/// re-entrant work that touches the indexer (notably `PhotoGridView`'s
+/// `task(id: library.assets.count)`) on this flag, otherwise an unrelated
+/// library-count change can call `index(assets:)` on the about-to-be-discarded
+/// indexer mid-switch.
+private struct IsSwitchingVariantKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
 extension EnvironmentValues {
     var activeVariant: CLIPVariant {
         get { self[ActiveVariantKey.self] }
@@ -177,5 +214,10 @@ extension EnvironmentValues {
     var switchVariant: (CLIPVariant) -> Void {
         get { self[SwitchVariantKey.self] }
         set { self[SwitchVariantKey.self] = newValue }
+    }
+
+    var isSwitchingVariant: Bool {
+        get { self[IsSwitchingVariantKey.self] }
+        set { self[IsSwitchingVariantKey.self] = newValue }
     }
 }

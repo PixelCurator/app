@@ -68,8 +68,13 @@ struct RootTabView: View {
         case .photos:
             PhotoGridView(onShowInbox: { selection = .sort })
         case .sort:
-            if let coordinator = sortingCoordinator {
-                SortingInboxView(coordinator: coordinator)
+            // `SortingInboxView` reads the coordinator from the environment
+            // (not a stored property) so it never captures an orphan reference
+            // after a variant switch. The coordinator instance itself is
+            // long-lived now (`updateVariant` swaps data sources in place),
+            // but the env path is the structural fix.
+            if sortingCoordinator != nil {
+                SortingInboxView()
             } else {
                 ContentUnavailableView(
                     "Preparing…",

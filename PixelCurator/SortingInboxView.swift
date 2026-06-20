@@ -18,10 +18,21 @@ struct SortingInboxView: View {
     @Environment(PhotoController.self) private var library
     @Environment(\.embeddingIndexer) private var embeddingIndexer
 
-    /// The coordinator owns the session state. Passed as a direct reference
-    /// because SortingCoordinator is @Observable — SwiftUI tracks changes
-    /// automatically without a @Binding.
-    var coordinator: SortingCoordinator
+    /// The coordinator owns the session state. Read from the environment so
+    /// the view never captures an orphan after a variant switch (previously
+    /// the coordinator was a stored property, which is now ruled out
+    /// structurally even though the coordinator is also long-lived).
+    ///
+    /// The body is gated on a non-nil `sortingCoordinator` at the
+    /// `RootTabView` level, so the force-unwrap here is safe in practice.
+    @Environment(\.sortingCoordinator) private var injectedCoordinator
+
+    private var coordinator: SortingCoordinator {
+        guard let c = injectedCoordinator else {
+            fatalError("SortingInboxView presented without a SortingCoordinator in the environment.")
+        }
+        return c
+    }
 
     // MARK: - Local UI state
 
@@ -258,6 +269,18 @@ struct SortingInboxView: View {
         .onChange(of: coordinator.decisionLog.lastRedoneAlbumName) { _, name in
             if let name {
                 Task { await showToast("Re-added to \(name)") }
+            }
+        }
+        // Undo failure feedback — without this, a remove-side failure leaves
+        // the user staring at an unchanged screen with no idea why.
+        .onChange(of: coordinator.decisionLog.lastUndoError) { _, error in
+            if let error {
+                Task { await showToast(error) }
+            }
+        }
+        .onChange(of: coordinator.decisionLog.lastRedoError) { _, error in
+            if let error {
+                Task { await showToast(error) }
             }
         }
         // Load hero image whenever current changes

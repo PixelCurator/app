@@ -24,13 +24,16 @@ final class SortingCoordinator {
 
     // MARK: - Dependencies
 
-    private let store: EmbeddingStore
-    private let suggester: AlbumSuggester
+    private var store: EmbeddingStore
+    private var suggester: AlbumSuggester
     let albumManager: AlbumManager
     private let photoController: PhotoController
-    let modelID: String
+    /// `modelID` is mutable because `updateVariant(...)` rebinds the coordinator
+    /// to a new variant's data sources without throwing away `decisionLog`
+    /// (Undo history must survive a variant switch).
+    private(set) var modelID: String
     let decisionLog: DecisionLog
-    private let correctionStore: CorrectionStore?
+    private var correctionStore: CorrectionStore?
 
     // MARK: - State
 
@@ -86,6 +89,38 @@ final class SortingCoordinator {
         // If no DecisionLog is provided, create one backed by the shared albumManager.
         self.decisionLog = decisionLog ?? DecisionLog(operations: albumManager)
         self.correctionStore = correctionStore
+    }
+
+    // MARK: - Variant switch
+
+    /// Rebinds the coordinator to a new variant's data sources without
+    /// reallocating the coordinator itself.
+    ///
+    /// Preserves `decisionLog` (and therefore Undo history) across variant
+    /// switches — reallocating a `SortingCoordinator` per switch would silently
+    /// wipe the user's undo stack. The active session, if any, is also reset:
+    /// the queue is rebuilt against the new variant's embedded set.
+    ///
+    /// Called by `PixelCuratorApp.bootIndexer(variant:)` after the prior
+    /// indexer has been awaited to completion (see `EmbeddingIndexer.cancelAndWait`).
+    func updateVariant(
+        store newStore: EmbeddingStore,
+        suggester newSuggester: AlbumSuggester,
+        correctionStore newCorrectionStore: CorrectionStore?,
+        modelID newModelID: String
+    ) {
+        self.store = newStore
+        self.suggester = newSuggester
+        self.correctionStore = newCorrectionStore
+        self.modelID = newModelID
+        // Clear the active session; the queue is variant-specific (embedded set
+        // is keyed by modelID). The caller will rebuild before presenting.
+        queue = []
+        currentIndex = 0
+        sortedCount = 0
+        isSorting = false
+        currentSuggestions = []
+        lastAssignError = nil
     }
 
     // MARK: - Queue building

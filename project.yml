@@ -62,6 +62,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yves.vogl.pixelcurator.tests
         GENERATE_INFOPLIST_FILE: YES
+        # xcodegen emits a single TEST_HOST that uses the iOS bundle layout
+        # (App.app/Exe), which breaks on macOS where the executable lives at
+        # App.app/Contents/MacOS/Exe. The macOS Test action in Xcode Cloud
+        # consequently fails with "Could not find test host" before any test
+        # runs. Override per-SDK using the [sdk=macosx*] condition; iOS keeps
+        # the default xcodegen path so we don't change it explicitly.
+        "TEST_HOST[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/PixelCurator.app/Contents/MacOS/PixelCurator
+        "BUNDLE_LOADER[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/PixelCurator.app/Contents/MacOS/PixelCurator
 
   PixelCuratorUITests:
     type: bundle.ui-testing

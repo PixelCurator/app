@@ -19,4 +19,20 @@ brew install xcodegen
 
 # CI_PRIMARY_REPOSITORY_PATH points at the checked-out repo root on Xcode Cloud.
 cd "$CI_PRIMARY_REPOSITORY_PATH"
+
+# Stamp CURRENT_PROJECT_VERSION with the CI build number BEFORE xcodegen runs,
+# so the auto-generated Info.plist (GENERATE_INFOPLIST_FILE=YES) picks up the
+# correct build number. This replaces the legacy `agvtool new-version -all`
+# step that runs after generation — agvtool can't update CFBundleVersion when
+# there is no Info.plist on disk yet and fails with `Cannot find ".../YES"`,
+# which used to take down every Xcode Cloud Test action.
+#
+# CI_BUILD_NUMBER is only set inside Xcode Cloud; locally project.yml stays at
+# its committed value so dev builds keep working.
+if [ -n "$CI_BUILD_NUMBER" ]; then
+    sed -i.bak -E "s/^([[:space:]]+CURRENT_PROJECT_VERSION:)[[:space:]].*/\1 \"$CI_BUILD_NUMBER\"/" project.yml
+    rm -f project.yml.bak
+    echo "Stamped CURRENT_PROJECT_VERSION = $CI_BUILD_NUMBER in project.yml"
+fi
+
 xcodegen generate

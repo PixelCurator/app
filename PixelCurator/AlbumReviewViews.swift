@@ -57,6 +57,7 @@ struct AlbumDetailView: View {
     @State private var selectedAsset: PHAsset?
     @State private var showingPhotoDialog = false
     @State private var showingMoveDialog = false
+    @State private var toast: String?
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
@@ -113,22 +114,80 @@ struct AlbumDetailView: View {
             if let asset = selectedAsset {
                 ForEach(albumManager.albums.filter { $0.id != album.id }) { target in
                     Button(target.title) {
-                        Task {
-                            // Only drop the asset from the current album if it was
-                            // actually added to the target — otherwise a failed
-                            // assign (e.g. PhotoKit error) would leave the photo in
-                            // no album at all.
-                            let added = await albumManager.assign(asset, toAlbumNamed: target.title)
-                            if added {
-                                _ = await albumManager.remove(asset, fromAlbumNamed: album.title)
-                            }
-                            await loadAssets()
-                        }
+                        Task { await move(asset, from: album, to: target) }
                     }
                 }
             }
             Button("Cancel", role: .cancel) {}
         }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                toastBanner(toast)
+            }
+        }
+    }
+
+    // MARK: - Move flow
+
+    /// Moves `asset` from `source` to `target` as an assign-then-remove pair.
+    ///
+    /// Failure handling:
+    /// - If the assign fails, the asset stays in `source`; we report the error.
+    /// - If the remove fails after a successful assign, the asset is now in
+    ///   *both* albums. We attempt to roll back the assign by removing the
+    ///   asset from `target` by its `localIdentifier` (not by title — Photos
+    ///   allows duplicate-named albums, and a title-based lookup might delete
+    ///   the wrong collection's membership). If the rollback also fails, we
+    ///   surface the double-assign explicitly rather than hide it.
+    @MainActor
+    private func move(
+        _ asset: PHAsset,
+        from source: AlbumManager.Album,
+        to target: AlbumManager.Album
+    ) async {
+        let added = await albumManager.assign(asset, toAlbumNamed: target.title)
+        guard added else {
+            await showToast(albumManager.lastError ?? "Move failed — could not add to \(target.title).")
+            await loadAssets()
+            return
+        }
+
+        // Remove from source by localIdentifier — Photos permits duplicate
+        // album titles, so a title-based remove could mutate the wrong album.
+        let removed = await albumManager.remove(asset, fromAlbumWithID: source.id)
+        if removed {
+            await showToast("Moved to \(target.title)")
+            await loadAssets()
+            return
+        }
+
+        // Remove failed after assign succeeded → asset is currently in both
+        // albums. Try to roll back the assign by removing it from target.
+        let rolledBack = await albumManager.remove(asset, fromAlbumWithID: target.id)
+        if rolledBack {
+            await showToast("Move failed — asset kept in \(source.title).")
+        } else {
+            // Rollback failed too — be explicit so the user can fix it manually.
+            await showToast("Move partially failed — please review in Photos.app.")
+        }
+        await loadAssets()
+    }
+
+    @MainActor
+    private func showToast(_ message: String) async {
+        withAnimation { toast = message }
+        try? await Task.sleep(for: .seconds(2))
+        withAnimation { toast = nil }
+    }
+
+    @ViewBuilder
+    private func toastBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(.thinMaterial, in: Capsule())
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     // MARK: - Helpers

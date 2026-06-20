@@ -29,6 +29,15 @@ final class EmbeddingIndexer {
 
     private var _cancelRequested = false
 
+    /// Tracks the in-flight `index(assets:)` work so the orchestrator can await
+    /// completion before swapping the underlying `ModelContext`.
+    ///
+    /// Without this handle, `cancelIndexing()` only requests a stop — the await
+    /// on `embedder.embed(_:)` keeps running, and the final `context.save()` +
+    /// `isIndexing = false` writes can race a freshly-built replacement indexer
+    /// that shares the same `ModelContext`.
+    private var currentTask: Task<Void, Never>?
+
     // MARK: - Dependencies
 
     private let context: ModelContext
@@ -61,7 +70,47 @@ final class EmbeddingIndexer {
     ///
     /// Sets `isIndexing = true` for the duration and resets it on completion
     /// or cancellation. Batch-saves every 20 embeddings to bound memory usage.
+    ///
+    /// The work is wrapped in a stored `Task` so the orchestrator can call
+    /// `cancelIndexing()` followed by `waitForCompletion()` (or the combined
+    /// `cancelAndWait()`) before constructing a replacement indexer over the
+    /// same `ModelContext`.
     func index(assets: [PHAsset]) async {
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runIndex(assets: assets)
+        }
+        currentTask = task
+        await task.value
+    }
+
+    /// Signals the in-flight `index(assets:)` call to stop after the current asset.
+    ///
+    /// This only requests a stop — it does NOT block until the loop exits. Use
+    /// `cancelAndWait()` (or pair this with `waitForCompletion()`) when the
+    /// caller is about to reuse or replace the shared `ModelContext`, otherwise
+    /// the prior indexer's trailing `context.save()` and `isIndexing = false`
+    /// writes will race the replacement.
+    func cancelIndexing() {
+        _cancelRequested = true
+    }
+
+    /// Awaits the in-flight `index(assets:)` task, if any. Returns immediately
+    /// if no indexing is in progress.
+    func waitForCompletion() async {
+        await currentTask?.value
+    }
+
+    /// Convenience: requests cancellation and awaits the in-flight task. Safe to
+    /// call when no indexing is in progress.
+    func cancelAndWait() async {
+        _cancelRequested = true
+        await currentTask?.value
+    }
+
+    // MARK: - Indexing body
+
+    private func runIndex(assets: [PHAsset]) async {
         isIndexing = true
         _cancelRequested = false
 
@@ -101,11 +150,6 @@ final class EmbeddingIndexer {
 
         try? context.save()
         isIndexing = false
-    }
-
-    /// Signals the in-flight `index(assets:)` call to stop after the current asset.
-    func cancelIndexing() {
-        _cancelRequested = true
     }
 
     // MARK: - Private helpers

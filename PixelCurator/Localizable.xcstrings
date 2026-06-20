@@ -81,6 +81,16 @@
         }
       }
     },
+    "Album name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Albumname"
+          }
+        }
+      }
+    },
     "Albums": {
       "localizations": {
         "de": {
@@ -147,6 +157,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Abbrechen"
+          }
+        }
+      }
+    },
+    "Create": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anlegen"
           }
         }
       }
@@ -317,6 +337,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "In anderes Album verschieben…"
+          }
+        }
+      }
+    },
+    "New Album": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neues Album"
           }
         }
       }

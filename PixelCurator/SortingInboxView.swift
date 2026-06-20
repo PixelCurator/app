@@ -47,6 +47,16 @@ struct SortingInboxView: View {
     @State private var selectedIDs: Set<String> = []
     @State private var showBatchAssignPicker = false
 
+    // MARK: - New-album naming sheet state
+    //
+    // ONE shared sheet drives both the single-asset and batch flows. The active
+    // call site sets `pendingNewAlbumAction` to a closure that receives the
+    // trimmed, non-empty name; the sheet invokes it on Create.
+
+    @State private var showNewAlbumSheet = false
+    @State private var newAlbumName: String = ""
+    @State private var pendingNewAlbumAction: ((String) -> Void)?
+
     // MARK: - Body
 
     var body: some View {
@@ -116,10 +126,83 @@ struct SortingInboxView: View {
                     batchAssignBar
                 }
             }
+            // Shared "name your new album" sheet — driven by the active call
+            // site through `pendingNewAlbumAction`. One sheet, two flows
+            // (single-asset review + batch select).
+            .sheet(isPresented: $showNewAlbumSheet) {
+                newAlbumNameSheet
+            }
         }
         .task {
             coordinator.buildQueue()
         }
+    }
+
+    // MARK: - New-album naming sheet
+
+    /// A trimmed copy of `newAlbumName`. Empty/whitespace input disables Create.
+    private var trimmedNewAlbumName: String {
+        newAlbumName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isNewAlbumNameValid: Bool {
+        !trimmedNewAlbumName.isEmpty
+    }
+
+    /// Set the pending action and reveal the sheet. The shared sheet calls the
+    /// action with the trimmed name when the user confirms.
+    private func presentNewAlbumSheet(perform action: @escaping (String) -> Void) {
+        newAlbumName = ""
+        pendingNewAlbumAction = action
+        showNewAlbumSheet = true
+    }
+
+    @ViewBuilder
+    private var newAlbumNameSheet: some View {
+        NavigationStack {
+            Form {
+                TextField("Album name", text: $newAlbumName)
+                    .accessibilityIdentifier("new-album-name-field")
+                    #if os(iOS)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled(false)
+                    .submitLabel(.done)
+                    #endif
+                    .onSubmit {
+                        if isNewAlbumNameValid { confirmNewAlbum() }
+                    }
+            }
+            .navigationTitle("New Album")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showNewAlbumSheet = false
+                        pendingNewAlbumAction = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { confirmNewAlbum() }
+                        .disabled(!isNewAlbumNameValid)
+                        .accessibilityIdentifier("new-album-confirm-button")
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 360, minHeight: 160)
+        #endif
+        .presentationDetents([.medium])
+    }
+
+    private func confirmNewAlbum() {
+        let name = trimmedNewAlbumName
+        guard !name.isEmpty else { return }
+        let action = pendingNewAlbumAction
+        pendingNewAlbumAction = nil
+        showNewAlbumSheet = false
+        action?(name)
     }
 
     // MARK: - Selection grid
@@ -170,12 +253,13 @@ struct SortingInboxView: View {
             }
             Button("➕ New album…") {
                 let assets = coordinator.queue.filter { selectedIDs.contains($0.localIdentifier) }
-                let chosenTitle = "PixelCurator"
-                Task {
-                    let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
-                    selectedIDs.removeAll()
-                    isSelecting = false
-                    await showToast("Added \(n) to \(chosenTitle)")
+                presentNewAlbumSheet { chosenTitle in
+                    Task {
+                        let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
+                        selectedIDs.removeAll()
+                        isSelecting = false
+                        await showToast("Added \(n) to \(chosenTitle)")
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -246,9 +330,11 @@ struct SortingInboxView: View {
                 }
             }
             Button("➕ New album…") {
-                Task {
-                    await coordinator.assignTo(albumNamed: "PixelCurator")
-                    await showToast("Added to PixelCurator")
+                presentNewAlbumSheet { chosenTitle in
+                    Task {
+                        await coordinator.assignTo(albumNamed: chosenTitle)
+                        await showToast("Added to \(chosenTitle)")
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}

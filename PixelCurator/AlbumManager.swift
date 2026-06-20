@@ -221,7 +221,37 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         }
     }
 
+    /// Tracks in-flight find-or-create work per album name so concurrent
+    /// callers serialize on the same `Task` instead of each running an
+    /// independent fetch + create, which would race and duplicate the album.
+    private var pendingCreations: [String: Task<PHAssetCollection, Error>] = [:]
+
+    /// Resolve an album by title, creating it if missing.
+    ///
+    /// Photos.app permits multiple albums with identical titles; once a
+    /// duplicate exists, the title-based fallback paths (`remove(_:fromAlbumNamed:)`,
+    /// `DecisionLog` undo on legacy entries) can no longer disambiguate. Without
+    /// the per-name `Task` cache below, two concurrent assigns to the same name
+    /// (the batch-select dialog re-tapped, or two suggestion accepts that
+    /// happen to target the same fresh name) both miss the existence check and
+    /// both issue creationRequests, producing the very duplicate that breaks
+    /// downstream lookup.
+    ///
+    /// Because `AlbumManager` is `@MainActor`, the `pendingCreations`
+    /// dictionary writes are serialized; the second caller sees the first
+    /// caller's task already in flight and awaits it instead of starting a new
+    /// one. If the task throws, both awaiters receive the same error.
     private func findOrCreateAlbum(named name: String) async throws -> PHAssetCollection {
+        if let inFlight = pendingCreations[name] {
+            return try await inFlight.value
+        }
+        let task = Task { try await actuallyFindOrCreateAlbum(named: name) }
+        pendingCreations[name] = task
+        defer { pendingCreations[name] = nil }
+        return try await task.value
+    }
+
+    private func actuallyFindOrCreateAlbum(named name: String) async throws -> PHAssetCollection {
         // Existing album with this exact title?
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localizedTitle = %@", name)

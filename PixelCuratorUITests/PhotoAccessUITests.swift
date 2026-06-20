@@ -17,21 +17,24 @@ final class PhotoAccessUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // The permission alert is presented by Springboard.
+        // The permission alert is presented by Springboard — but only on the
+        // very first launch under a fresh sim state. On repeat runs (locally
+        // re-running the test plan, or Xcode Cloud re-using a cached sim) the
+        // permission was already granted and no dialog appears. Tap an Allow
+        // button if one is present, otherwise fall through to the grid
+        // assertions below — those are the real proof of access, dialog or not.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allowButtons = ["Allow Full Access", "Allow Access to All Photos", "Allow"]
-        var granted = false
         for label in allowButtons {
             let button = springboard.buttons[label]
-            if button.waitForExistence(timeout: 5) {
+            if button.waitForExistence(timeout: 3) {
                 button.tap()
-                granted = true
                 break
             }
         }
-        XCTAssertTrue(granted, "Photo-access permission dialog did not appear or could not be granted")
 
-        // After granting, the grid screen shows the "PixelCurator" navigation title.
+        // After granting (or if access was already granted), the grid screen
+        // shows the "PixelCurator" navigation title.
         let navBar = app.navigationBars["PixelCurator"]
         XCTAssertTrue(navBar.waitForExistence(timeout: 10),
                       "Photo grid did not appear after granting access")

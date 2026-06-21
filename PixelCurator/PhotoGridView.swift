@@ -56,26 +56,30 @@ struct PhotoGridView: View {
                         onShowInbox()
                     } label: {
                         HStack(spacing: 8) {
-                            // Icon is interpolated INTO the Text (not a standalone
-                            // Image) so it renders no separate accessibility image
-                            // element above the grid — otherwise `app.images`
-                            // queries would match it instead of a grid thumbnail.
-                            // The arrow stays inside the Text for the same reason.
+                            Image(systemName: "tray.full.fill")
+                                .foregroundStyle(.tint)
+                                .accessibilityHidden(true)
                             Text("\(unsortedCount) photos to sort →")
-                                .font(.callout.weight(.medium))
+                                .font(.callout.weight(.semibold))
                                 .foregroundStyle(.primary)
+                                .tracking(0.1)
                             Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
                         }
-                        .padding(.horizontal, 16)
-                        // 16pt vertical padding + body text → ≥44pt touch target
-                        // per Apple HIG (iOS minimum hit area).
-                        .padding(.vertical, 16)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
                         .frame(minHeight: 44)
-                        .background(.thinMaterial)
+                        .background(.regularMaterial)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PolishedButtonStyle())
                     .accessibilityIdentifier("inbox-cta")
+                    .accessibilityLabel(Text("\(unsortedCount) photos to sort"))
                     .accessibilityHint(Text("Opens the sorting inbox"))
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: unsortedCount > 0)
                 }
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(library.visibleAssets, id: \.localIdentifier) { asset in
@@ -87,6 +91,8 @@ struct PhotoGridView: View {
                                 selectedAsset = asset
                                 assignAssetItem = IdentifiableAsset(asset)
                             }
+                            .accessibilityLabel(Text("Photo"))
+                            .accessibilityHint(Text("Double-tap to add to an album. Long press for more options."))
                             .contextMenu {
                                 Button {
                                     similarAssetItem = IdentifiableAsset(asset)
@@ -158,9 +164,10 @@ struct PhotoGridView: View {
                     Text(toast)
                         .font(.callout.weight(.medium))
                         .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.thinMaterial, in: Capsule())
+                        .background(.regularMaterial, in: Capsule())
                         .padding(.bottom, 24)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityAddTraits(.updatesFrequently)
                 }
             }
             .sheet(item: $assignAssetItem) { item in
@@ -267,9 +274,13 @@ struct PhotoGridView: View {
             ProgressView()
                 .controlSize(.small)
             Text("Indexing \(indexer.indexed)/\(indexer.total)")
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("Indexing photos"))
+        .accessibilityValue(Text("\(indexer.indexed) of \(indexer.total)"))
     }
 
     // MARK: - Album assignment
@@ -305,12 +316,9 @@ struct PhotoGridView: View {
 
     @MainActor
     private func showToast(_ message: String) async {
-        // HIG accessibility: respect Reduce Motion. Pass `nil` to disable the
-        // implicit slide-in animation when the user opts out, while keeping
-        // the state change so the toast still appears.
-        let animation: Animation? = reduceMotion ? nil : .default
+        let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
-        try? await Task.sleep(for: .seconds(2))
+        try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }
 }
@@ -354,6 +362,8 @@ private struct AssignSuggestionSheet: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(Text("\(suggestion.albumTitle), \(Int((suggestion.score * 100).rounded())) percent match"))
+                            .accessibilityHint(Text("Double-tap to assign photo to this album"))
                         }
                     }
                 } else {
@@ -411,15 +421,16 @@ private struct ThumbnailCell: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                Rectangle().fill(.gray.opacity(0.15))
                 if let image {
                     Image(platformImage: image)
                         .resizable()
                         .scaledToFill()
-                } else {
-                    Rectangle().fill(.gray.opacity(0.15))
+                        .transition(.opacity)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .animation(.easeInOut(duration: 0.2), value: image != nil)
             .overlay(alignment: .topTrailing) {
                 // Subtle iCloud affordance — only present for iCloud-only
                 // assets. Lookup is O(1) against the controller's cached

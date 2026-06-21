@@ -34,6 +34,8 @@ struct SimilarResultsView: View {
                     queryHeader
                     resultGrid
                 }
+                .animation(.easeInOut(duration: 0.3), value: search.isSearching)
+                .animation(.easeInOut(duration: 0.3), value: hasSearched)
             }
             .navigationTitle("Similar Photos")
             #if os(iOS)
@@ -70,6 +72,7 @@ struct SimilarResultsView: View {
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 4)
             }
+            .accessibilityLabel(Text("Query photo — searching for visually similar photos"))
     }
 
     /// Grid of similar results — or appropriate empty/loading state.
@@ -77,9 +80,12 @@ struct SimilarResultsView: View {
     private var resultGrid: some View {
         if search.isSearching {
             ProgressView("Finding similar photos…")
+                .controlSize(.large)
                 .padding(.top, 40)
+                .transition(.opacity)
         } else if hasSearched && results.isEmpty {
             emptyState
+                .transition(.opacity)
         } else {
             LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(results, id: \.localIdentifier) { asset in
@@ -90,24 +96,16 @@ struct SimilarResultsView: View {
                 }
             }
             .padding(2)
+            .transition(.opacity)
         }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text("No similar photos found yet")
-                .font(.headline)
-            Text("Indexing may still be running. Try again once the progress indicator disappears.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-        }
-        .padding(.top, 40)
-        .padding(.horizontal)
+        ContentUnavailableView(
+            "No Similar Photos",
+            systemImage: "photo.on.rectangle.angled",
+            description: Text("Indexing may still be running. Try again once the progress indicator disappears.")
+        )
     }
 }
 
@@ -129,11 +127,14 @@ private struct SimilarThumbnailCell: View {
                     Image(platformImage: image)
                         .resizable()
                         .scaledToFill()
+                        .transition(.opacity)
                 } else {
                     Rectangle().fill(.gray.opacity(0.15))
+                        .transition(.opacity)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .animation(.easeInOut(duration: 0.2), value: image != nil)
             .task(id: asset.localIdentifier) {
                 let scale = 2.0
                 let target = CGSize(

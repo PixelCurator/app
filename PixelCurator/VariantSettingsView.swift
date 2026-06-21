@@ -92,6 +92,7 @@ struct VariantSettingsView: View {
             if isCurrent {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.tint)
+                    .transition(.scale(scale: 0.7).combined(with: .opacity))
                     .accessibilityLabel(Text("Currently selected"))
             } else if unlocked {
                 Button("Select") {
@@ -122,6 +123,17 @@ struct VariantSettingsView: View {
             }
         }
         .contentShape(Rectangle())
+        .animation(.snappy(duration: 0.25, extraBounce: 0.1), value: isCurrent)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(variantAccessibilityLabel(variant, unlocked: unlocked, isCurrent: isCurrent))
+    }
+
+    private func variantAccessibilityLabel(_ variant: CLIPVariant, unlocked: Bool, isCurrent: Bool) -> Text {
+        let name = Text(LocalizedStringKey(variant.displayName))
+        let tier = variant.tier == .free ? Text("Free") : Text("Pro")
+        if isCurrent { return name + Text(", ") + tier + Text(", currently selected") }
+        if unlocked { return name + Text(", ") + tier + Text(", available") }
+        return name + Text(", ") + tier + Text(", locked")
     }
 
     // MARK: - Purchase

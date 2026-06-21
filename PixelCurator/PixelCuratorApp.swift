@@ -73,12 +73,16 @@ struct PixelCuratorApp: App {
                 .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
                 // App-wide indexing lock: presented whenever the indexer is
-                // actively running. Using .fullScreenCover keeps it above
-                // sheets and navigation stacks; interactiveDismissDisabled
-                // prevents swipe-to-dismiss while the rebuild is in flight.
+                // actively running. On iOS we use .fullScreenCover so it sits
+                // above sheets and navigation stacks; on macOS .fullScreenCover
+                // is unavailable in SwiftUI, so we fall back to a modal .sheet
+                // (already window-modal on macOS). interactiveDismissDisabled
+                // prevents swipe-to-dismiss / tap-outside while the rebuild
+                // is in flight.
+                #if os(iOS)
                 .fullScreenCover(isPresented: Binding(
                     get: { indexer?.isIndexing == true },
-                    set: { _ in } // read-only; dismissal is gated below
+                    set: { _ in } // read-only; dismissal is gated by isIndexing flipping false
                 )) {
                     if let liveIndexer = indexer {
                         IndexingLockOverlay(indexer: liveIndexer)
@@ -87,6 +91,20 @@ struct PixelCuratorApp: App {
                             .onDisappear { endBackgroundIndexingTask() }
                     }
                 }
+                #else
+                .sheet(isPresented: Binding(
+                    get: { indexer?.isIndexing == true },
+                    set: { _ in }
+                )) {
+                    if let liveIndexer = indexer {
+                        IndexingLockOverlay(indexer: liveIndexer)
+                            .interactiveDismissDisabled()
+                            .task { beginBackgroundIndexingTask() }
+                            .onDisappear { endBackgroundIndexingTask() }
+                            .frame(minWidth: 480, minHeight: 360)
+                    }
+                }
+                #endif
         }
         #if os(macOS)
         .defaultSize(width: 900, height: 700)

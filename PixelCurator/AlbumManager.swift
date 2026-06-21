@@ -162,6 +162,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
             }
+            await waitForLibraryWriteToSettle()
             loadAlbums()
             return .added(albumID: albumID)
         } catch {
@@ -193,6 +194,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
             }
+            await waitForLibraryWriteToSettle()
             loadAlbums()
             return true
         } catch {
@@ -202,6 +204,36 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     }
 
     /// `true` iff `asset` is currently a member of `collection`.
+    // MARK: - macOS write-settle delay
+
+    /// Briefly yields after a `performChanges` write so that the subsequent
+    /// `loadAlbums()` fetch sees up-to-date counts.
+    ///
+    /// On iOS the change notification is delivered before `performChanges`
+    /// resumes, so a same-runloop fetch is already consistent. On macOS the
+    /// notification fan-out is more loosely coupled to the change request —
+    /// in practice an immediate fetch can return stale per-album counts for
+    /// ~50–150 ms after a successful write. A user-visible symptom: the toast
+    /// says "Moved to <Album>" but the source album's count stays unchanged
+    /// until the user navigates away and back.
+    ///
+    /// Pure delay (rather than blocking on `PHPhotoLibraryChangeObserver`) is
+    /// the right primitive here because:
+    /// - the change observer is debounced upstream in `PhotoController`, so
+    ///   coupling write completion to the observer would re-introduce that
+    ///   debounce window;
+    /// - the observer fires for every library change, not just the one we
+    ///   just made — awaiting "the next observer fire" would race with
+    ///   unrelated changes (e.g. iCloud Shared Library);
+    /// - the delay is bounded and small enough not to be perceptible.
+    ///
+    /// No-op on iOS.
+    private func waitForLibraryWriteToSettle() async {
+        #if os(macOS)
+        try? await Task.sleep(for: .milliseconds(150))
+        #endif
+    }
+
     private func isAsset(_ asset: PHAsset, memberOf collection: PHAssetCollection) -> Bool {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localIdentifier = %@", asset.localIdentifier)
@@ -250,6 +282,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.removeAssets([asset] as NSArray)
             }
+            await waitForLibraryWriteToSettle()
             loadAlbums()
             return true
         } catch {

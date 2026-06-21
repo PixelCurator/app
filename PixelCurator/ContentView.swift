@@ -10,6 +10,7 @@ struct ContentView: View {
             switch library.authState {
             case .unknown:
                 ProgressView("Checking photo access…")
+                    .transition(.opacity)
                     .task {
                         library.refreshAuthState()
                         if library.authState == .unknown {
@@ -22,12 +23,15 @@ struct ContentView: View {
 
             case .authorized, .limited:
                 RootTabView()
+                    .transition(.opacity)
                     .task { albums.loadAlbums() }
 
             case .denied, .restricted:
                 AccessDeniedView()
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.4), value: library.authState == .authorized || library.authState == .limited)
     }
 }
 

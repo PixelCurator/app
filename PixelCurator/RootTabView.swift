@@ -57,6 +57,9 @@ struct RootTabView: View {
                     .tag(section)
             }
         }
+        #if os(iOS)
+        .sensoryFeedback(.selection, trigger: selection)
+        #endif
         #endif
     }
 

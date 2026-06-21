@@ -25,9 +25,10 @@ struct AlbumsListView: View {
                             description: Text("Albums you create in Photos will appear here.")
                         )
                     } else {
-                        ProgressView("Loading albums…")
-                            .controlSize(.regular)
+                        ProgressView()
+                            .controlSize(.large)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .accessibilityValue(Text("Loading albums"))
                     }
                 } else {
                     List(albumManager.albums) { album in
@@ -42,12 +43,18 @@ struct AlbumsListView: View {
                             }
                             .accessibilityElement(children: .combine)
                         }
+                        .accessibilityHint(Text("Opens album to view and manage photos"))
                     }
                     #if os(macOS)
                     .listStyle(.inset(alternatesRowBackgrounds: true))
                     #endif
+                    .refreshable {
+                        albumManager.loadAlbums()
+                    }
                 }
             }
+            .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: albumManager.albums.isEmpty)
+            .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: didLoadOnce)
             .navigationTitle("Albums")
             .accessibilityIdentifier("albums-list")
             .navigationDestination(for: AlbumManager.Album.self) { album in
@@ -110,8 +117,14 @@ struct AlbumDetailView: View {
                                 selectedAsset = asset
                                 showingPhotoDialog = true
                             }
+                            .accessibilityLabel(Text("Photo"))
+                            .accessibilityHint(Text("Double-tap to remove or move this photo"))
                     }
                 }
+                .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: assets.count)
+                #if os(iOS)
+                .sensoryFeedback(.impact(weight: .light), trigger: showingPhotoDialog)
+                #endif
                 .padding(2)
             }
         }
@@ -204,9 +217,9 @@ struct AlbumDetailView: View {
 
     @MainActor
     private func showToast(_ message: String) async {
-        let animation: Animation? = reduceMotion ? nil : .default
+        let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
-        try? await Task.sleep(for: .seconds(2))
+        try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }
 
@@ -215,9 +228,10 @@ struct AlbumDetailView: View {
         Text(message)
             .font(.callout.weight(.medium))
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.thinMaterial, in: Capsule())
+            .background(.regularMaterial, in: Capsule())
             .padding(.bottom, 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityAddTraits(.updatesFrequently)
     }
 
     // MARK: - Helpers
@@ -274,11 +288,14 @@ private struct AlbumThumbnailCell: View {
                     Image(platformImage: image)
                         .resizable()
                         .scaledToFill()
+                        .transition(.opacity)
                 } else {
                     Rectangle().fill(.gray.opacity(0.15))
+                        .transition(.opacity)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .animation(.easeInOut(duration: 0.2), value: image != nil)
             .task(id: asset.localIdentifier) {
                 let scale = 2.0
                 let target = CGSize(

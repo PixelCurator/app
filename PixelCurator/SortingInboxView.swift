@@ -74,6 +74,8 @@ struct SortingInboxView: View {
                     reviewCard
                 }
             }
+            .animation(.easeInOut(duration: 0.3), value: coordinator.isExhausted)
+            .animation(.easeInOut(duration: 0.3), value: isSelecting)
             .navigationTitle("Light Table")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -286,6 +288,7 @@ struct SortingInboxView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
             .accessibilityIdentifier("batch-assign-bar")
+            .accessibilityHint(Text("Opens album picker to assign selected photos"))
         }
         .background(.bar)
     }
@@ -315,6 +318,11 @@ struct SortingInboxView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 24)
         }
+        .id(coordinator.current?.localIdentifier ?? "")
+        .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: coordinator.current?.localIdentifier)
+        #if os(iOS)
+        .sensoryFeedback(.selection, trigger: coordinator.current?.localIdentifier)
+        #endif
         // Album picker (choose other)
         .confirmationDialog(
             "Add to album",
@@ -381,12 +389,15 @@ struct SortingInboxView: View {
         HStack {
             Text("\(coordinator.sortedCount) sorted")
                 .font(.caption.weight(.medium))
+                .tracking(0.3)
                 .foregroundStyle(.secondary)
             Spacer()
             Text("\(coordinator.remainingCount) remaining")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(coordinator.sortedCount) sorted, \(coordinator.remainingCount) remaining"))
     }
 
     // MARK: - Hero photo
@@ -402,10 +413,15 @@ struct SortingInboxView: View {
                     .resizable()
                     .scaledToFit()
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .transition(.opacity)
             } else {
-                ProgressView()
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.secondary.opacity(0.15))
+                    .overlay(ProgressView())
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: heroImage != nil)
         .frame(maxWidth: .infinity)
         .aspectRatio(4/3, contentMode: .fit)
         .padding(.horizontal)
@@ -425,15 +441,17 @@ struct SortingInboxView: View {
                 .padding(.vertical, 8)
         } else {
             VStack(spacing: 10) {
-                ForEach(suggestions) { suggestion in
+                ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
                     SuggestionChip(suggestion: suggestion) {
                         Task {
                             await coordinator.accept(suggestion)
                             await showToast("Added to \(suggestion.albumTitle)")
                         }
                     }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
+            .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: suggestions.map(\.albumTitle))
         }
     }
 
@@ -474,6 +492,7 @@ struct SortingInboxView: View {
         VStack(spacing: 20) {
             ProgressView()
                 .controlSize(.large)
+                .accessibilityValue(Text("Indexed \(indexer.indexed) of \(indexer.total) photos"))
             Text("Indexing \(indexer.indexed)/\(indexer.total)…")
                 .font(.title2.bold())
             Text("Suggestions appear as photos are indexed.")
@@ -516,9 +535,9 @@ struct SortingInboxView: View {
 
     @MainActor
     private func showToast(_ message: String) async {
-        withAnimation { toast = message }
-        try? await Task.sleep(for: .seconds(2))
-        withAnimation { toast = nil }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = message }
+        try? await Task.sleep(for: .seconds(2.5))
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = nil }
     }
 
     @ViewBuilder
@@ -526,9 +545,11 @@ struct SortingInboxView: View {
         Text(message)
             .font(.callout.weight(.medium))
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.thinMaterial, in: Capsule())
+            .background(.regularMaterial, in: Capsule())
             .padding(.bottom, 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityAddTraits(.updatesFrequently)
+            .accessibilityLabel(message)
     }
 }
 
@@ -560,8 +581,10 @@ private struct SelectionThumbnailCell: View {
                     if isSelected {
                         Rectangle()
                             .fill(.blue.opacity(0.25))
+                            .transition(.opacity)
                     }
                 }
+                .animation(.snappy(duration: 0.2, extraBounce: 0), value: isSelected)
                 .overlay {
                     if isSelected {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -597,8 +620,13 @@ private struct SuggestionChip: View {
     let suggestion: AlbumSuggestion
     let onAccept: () -> Void
 
+    @State private var chipFeedbackTrigger: Bool = false
+
     var body: some View {
-        Button(action: onAccept) {
+        Button {
+            chipFeedbackTrigger.toggle()
+            onAccept()
+        } label: {
             HStack {
                 Image(systemName: "folder")
                     .foregroundStyle(.secondary)
@@ -627,6 +655,12 @@ private struct SuggestionChip: View {
             .frame(minHeight: 44)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PolishedButtonStyle())
+        .accessibilityLabel(Text("Assign to \(suggestion.albumTitle)"))
+        .accessibilityHint(Text("Double-tap to assign the current photo to this album"))
+        .accessibilityValue(Text("\(Int(suggestion.score * 100)) percent confidence, \(suggestion.supportingCount) similar photos"))
+        #if os(iOS)
+        .sensoryFeedback(.impact(weight: .light), trigger: chipFeedbackTrigger)
+        #endif
     }
 }

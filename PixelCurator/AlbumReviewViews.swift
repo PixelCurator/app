@@ -38,9 +38,14 @@ struct AlbumsListView: View {
                                 Text("\(album.count)")
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
+                                    .accessibilityLabel(Text("\(album.count) photos"))
                             }
+                            .accessibilityElement(children: .combine)
                         }
                     }
+                    #if os(macOS)
+                    .listStyle(.inset(alternatesRowBackgrounds: true))
+                    #endif
                 }
             }
             .navigationTitle("Albums")

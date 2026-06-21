@@ -32,15 +32,16 @@ struct AppSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
+        // HIG: macOS Settings panes use `.formStyle(.grouped)` to render
+        // sectioned, padded forms that match System Settings styling. Without
+        // it the form looks like an iOS sheet shoved into a window.
+        .formStyle(.grouped)
+        .frame(minWidth: 420, minHeight: 200)
+        #endif
         .navigationTitle("Settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
-        #if os(macOS)
-        // Native Settings windows are sized by their content; give the form a
-        // sensible minimum so the toggle + footer aren't cramped.
-        .frame(minWidth: 420, minHeight: 200)
-        .padding()
         #endif
         .accessibilityIdentifier("app-settings-view")
     }

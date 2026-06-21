@@ -42,6 +42,11 @@ struct VariantSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            #if os(macOS)
+            // HIG: macOS settings-style lists read better as a grouped form.
+            .formStyle(.grouped)
+            .frame(minWidth: 460, minHeight: 320)
+            #endif
             .navigationTitle("Model Quality")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -87,6 +92,7 @@ struct VariantSettingsView: View {
             if isCurrent {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.tint)
+                    .accessibilityLabel(Text("Currently selected"))
             } else if unlocked {
                 Button("Select") {
                     onVariantChange(variant)
@@ -94,15 +100,24 @@ struct VariantSettingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .accessibilityLabel(Text("Select \(LocalizedStringKey(variant.displayName))"))
+            } else if purchasing == variant {
+                // Surface in-flight purchase — without this, the row looks
+                // frozen while StoreKit is awaiting the user's confirmation.
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(Text("Purchasing…"))
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "lock.fill")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Button("Unlock") {
                         Task { await purchase(variant) }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .accessibilityLabel(Text("Unlock \(LocalizedStringKey(variant.displayName))"))
                 }
             }
         }

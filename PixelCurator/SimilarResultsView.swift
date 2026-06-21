@@ -18,6 +18,8 @@ struct SimilarResultsView: View {
 
     // MARK: - State
 
+    @Environment(\.dismiss) private var dismiss
+
     @State private var results: [PHAsset] = []
     @State private var hasSearched = false
 
@@ -38,6 +40,14 @@ struct SimilarResultsView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .accessibilityIdentifier("similar-results-view")
+            .toolbar {
+                // HIG: sheets need an explicit dismiss affordance. Swipe-down
+                // works on iOS but not for keyboard / Switch Control users,
+                // and macOS sheets have no swipe gesture at all.
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .task {
                 results = await search.similarAssets(to: queryAsset.localIdentifier)
                 hasSearched = true

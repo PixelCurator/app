@@ -710,6 +710,86 @@
           }
         }
       }
+    },
+    "New album…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neues Album…"
+          }
+        }
+      }
+    },
+    "Open Settings": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen öffnen"
+          }
+        }
+      }
+    },
+    "Opens the sorting inbox": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet den Sortier-Posteingang"
+          }
+        }
+      }
+    },
+    "Currently selected": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktuell ausgewählt"
+          }
+        }
+      }
+    },
+    "Purchasing…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird gekauft…"
+          }
+        }
+      }
+    },
+    "Select %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ auswählen"
+          }
+        }
+      }
+    },
+    "Unlock %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ freischalten"
+          }
+        }
+      }
+    },
+    "%lld photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Fotos"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

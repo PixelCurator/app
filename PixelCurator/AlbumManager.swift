@@ -49,33 +49,42 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     func loadAlbums() {
         let signpostID = AlbumManager.signposter.makeSignpostID()
         let state = AlbumManager.signposter.beginInterval("loadAlbums", id: signpostID)
-        defer { AlbumManager.signposter.endInterval("loadAlbums", state) }
 
-        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
-        var collected: [Album] = []
-        result.enumerateObjects { collection, _, _ in
-            // Use PhotoKit's fast-path count cache (`estimatedAssetCount`) instead
-            // of running a full `PHAsset.fetchAssets(in:).count` per album. The
-            // full fetch is O(assets-in-album) and was the dominant blocker of
-            // the main thread — a library with 50 albums × 10k photos spent
-            // multiple seconds inside this enumeration on every `loadAlbums()`
-            // call, which fires after every assign / remove / library-change.
-            //
-            // `estimatedAssetCount` returns `NSNotFound` when PhotoKit hasn't
-            // populated the cache yet (typically first cold open). Fall back to
-            // the precise fetch in that case so the count is never wrong, just
-            // potentially slow on the very first read.
-            let estimated = collection.estimatedAssetCount
-            let count = estimated == NSNotFound
-                ? PHAsset.fetchAssets(in: collection, options: nil).count
-                : estimated
-            collected.append(Album(
-                id: collection.localIdentifier,
-                title: collection.localizedTitle ?? "Untitled",
-                count: count
-            ))
+        // Yves-reported bug: activating the Albums tab freezes the UI for
+        // several seconds on libraries with many albums, because
+        // `PHAssetCollection.fetchAssetCollections(...)` is a synchronous
+        // PhotoKit call. PR #40 fixed the per-album count side (estimatedAssetCount),
+        // but the top-level fetch + enumeration was still running on @MainActor.
+        //
+        // Surgical fix: keep the fire-and-forget sync signature so the 8
+        // existing call sites (assign/remove/etc.) don't need to migrate to
+        // async, but spawn a detached Task internally so the PhotoKit work
+        // happens off-main. Hop back to @MainActor only to assign `self.albums`.
+        // Callers that synchronously read `albums` immediately after invoking
+        // `loadAlbums()` will see a transient empty list — but the only such
+        // call site (AlbumsListView.task) already has the `didLoadOnce` flag
+        // from PR #41 to handle the empty-vs-loading distinction.
+        Task {
+            let collected = await Task.detached(priority: .userInitiated) { () -> [Album] in
+                var result: [Album] = []
+                let fetchResult = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+                fetchResult.enumerateObjects { collection, _, _ in
+                    let estimated = collection.estimatedAssetCount
+                    let count = estimated == NSNotFound
+                        ? PHAsset.fetchAssets(in: collection, options: nil).count
+                        : estimated
+                    result.append(Album(
+                        id: collection.localIdentifier,
+                        title: collection.localizedTitle ?? "Untitled",
+                        count: count
+                    ))
+                }
+                return result.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            }.value
+
+            self.albums = collected
+            AlbumManager.signposter.endInterval("loadAlbums", state)
         }
-        albums = collected.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
     /// Returns the `PHAsset.localIdentifier`s of every asset in the album

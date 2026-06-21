@@ -8,15 +8,27 @@ import Photos
 struct AlbumsListView: View {
     @Environment(AlbumManager.self) private var albumManager
 
+    /// Distinguishes "still loading" from "actually empty" so the
+    /// ContentUnavailableView only appears once we've confirmed there
+    /// genuinely are no albums. Without this state the empty-library copy
+    /// flashes for a frame before the real list resolves — HIG-distracting.
+    @State private var didLoadOnce = false
+
     var body: some View {
         NavigationStack {
             Group {
                 if albumManager.albums.isEmpty {
-                    ContentUnavailableView(
-                        "No Albums Yet",
-                        systemImage: "rectangle.stack",
-                        description: Text("Albums you create in Photos will appear here.")
-                    )
+                    if didLoadOnce {
+                        ContentUnavailableView(
+                            "No Albums Yet",
+                            systemImage: "rectangle.stack",
+                            description: Text("Albums you create in Photos will appear here.")
+                        )
+                    } else {
+                        ProgressView("Loading albums…")
+                            .controlSize(.regular)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     List(albumManager.albums) { album in
                         NavigationLink(value: album) {
@@ -38,6 +50,7 @@ struct AlbumsListView: View {
             }
             .task {
                 albumManager.loadAlbums()
+                didLoadOnce = true
             }
         }
     }
@@ -58,18 +71,28 @@ struct AlbumDetailView: View {
     @State private var showingPhotoDialog = false
     @State private var showingMoveDialog = false
     @State private var toast: String?
+    /// Same loading-vs-empty distinction as `AlbumsListView` — without it the
+    /// "No Photos" copy flashes for one frame on tap before the real grid
+    /// resolves.
+    @State private var didLoadOnce = false
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
     var body: some View {
         ScrollView {
             if assets.isEmpty {
-                ContentUnavailableView(
-                    "No Photos",
-                    systemImage: "photo.on.rectangle",
-                    description: Text("This album has no photos.")
-                )
-                .padding(.top, 60)
+                if didLoadOnce {
+                    ContentUnavailableView(
+                        "No Photos",
+                        systemImage: "photo.on.rectangle",
+                        description: Text("This album has no photos.")
+                    )
+                    .padding(.top, 60)
+                } else {
+                    ProgressView("Loading photos…")
+                        .controlSize(.regular)
+                        .padding(.top, 120)
+                }
             } else {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(assets, id: \.localIdentifier) { asset in
@@ -194,6 +217,7 @@ struct AlbumDetailView: View {
 
     @MainActor
     private func loadAssets() async {
+        defer { didLoadOnce = true }
         let ids = albumManager.memberAssetIDs(of: album.id)
         guard !ids.isEmpty else {
             assets = []

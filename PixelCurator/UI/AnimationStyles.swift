@@ -118,17 +118,19 @@ struct ShimmerModifier: ViewModifier {
     let isAnimating: Bool
 
     @State private var phase: CGFloat = -1
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
             .overlay { platformOverlay }
             .onAppear {
-                guard isAnimating else { return }
+                guard isAnimating, !reduceMotion else { return }
                 withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
                     phase = 1
                 }
             }
             .onChange(of: isAnimating) { _, newValue in
+                guard !reduceMotion else { phase = -1; return }
                 if newValue {
                     phase = -1
                     withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
@@ -138,15 +140,32 @@ struct ShimmerModifier: ViewModifier {
                     phase = -1
                 }
             }
+            // Cancel the in-flight sweep if the user enables Reduce Motion
+            // mid-load; otherwise the gradient keeps marching forever even
+            // though the user has opted out of motion.
+            .onChange(of: reduceMotion) { _, nowReduced in
+                if nowReduced {
+                    withAnimation(nil) { phase = -1 }
+                } else if isAnimating {
+                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                        phase = 1
+                    }
+                }
+            }
     }
 
-    /// Platform-dispatched overlay. iOS gets the sweeping shimmer; macOS
-    /// stays inert (loading states are fast enough that a shimmer would
-    /// flicker out before the user notices).
+    /// Platform-dispatched overlay. iOS gets the sweeping shimmer (unless
+    /// Reduce Motion is on — then it's suppressed); macOS stays inert
+    /// because loading states are fast enough that a shimmer would flicker
+    /// out before the user notices it.
     @ViewBuilder
     private var platformOverlay: some View {
         #if os(iOS)
-        shimmerOverlay
+        if reduceMotion {
+            EmptyView()
+        } else {
+            shimmerOverlay
+        }
         #else
         EmptyView()
         #endif

@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// App-level settings.
 ///
@@ -15,8 +16,22 @@ import SwiftUI
 struct AppSettingsView: View {
     @AppStorage("hideICloudPhotos") private var hideICloudPhotos: Bool = false
 
+    // MARK: - Injected services
+
+    @Environment(\.embeddingIndexer) private var indexer
+    @Environment(\.modelContext) private var modelContext
+    @Environment(PhotoController.self) private var library
+    @Environment(\.activeVariant) private var activeVariant
+
+    // MARK: - Local state
+
+    @State private var showDeleteConfirmation = false
+
+    // MARK: - Body
+
     var body: some View {
         Form {
+            // MARK: Photos section
             Section {
                 // Inverted polarity reads better: the user is choosing what to
                 // SHOW, not what to hide. We negate on read/write so the
@@ -28,6 +43,35 @@ struct AppSettingsView: View {
                 .accessibilityIdentifier("settings-show-icloud-photos")
             } footer: {
                 Text("iCloud-only photos appear with the iCloud badge but cannot be analyzed for album suggestions until downloaded in Photos.app.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // MARK: Index section
+            Section {
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete Index", systemImage: "trash")
+                        .foregroundStyle(.red)
+                }
+                .accessibilityIdentifier("settings-delete-index")
+                .confirmationDialog(
+                    "Delete and rebuild the index?",
+                    isPresented: $showDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete and Rebuild", role: .destructive) {
+                        Task { await resetIndex() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("PixelCurator will reanalyze every photo. This can take several minutes.")
+                }
+            } header: {
+                Text("Index")
+            } footer: {
+                Text("Reset the index if album suggestions feel wrong. The app stays locked while rebuilding.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -44,6 +88,27 @@ struct AppSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .accessibilityIdentifier("app-settings-view")
+    }
+
+    // MARK: - Index reset
+
+    /// Deletes all embeddings for the active variant, saves, and re-triggers the indexer.
+    ///
+    /// The full-screen lock overlay in `PixelCuratorApp` is bound to
+    /// `indexer.isIndexing`, so it appears automatically once `index(assets:)`
+    /// begins and disappears when it finishes — no extra wiring needed here.
+    @MainActor
+    private func resetIndex() async {
+        guard let indexer else { return }
+
+        // 1. Wipe all stored embeddings for the current variant.
+        EmbeddingStore(context: modelContext).deleteAll(modelID: activeVariant.modelID)
+        try? modelContext.save()
+
+        // 2. Re-index everything. `indexer.index(assets:)` sets `isIndexing = true`
+        //    which the top-level lock overlay observes and presents itself.
+        //    Background-task wrapping lives in PixelCuratorApp, not here.
+        await indexer.index(assets: library.assets)
     }
 }
 

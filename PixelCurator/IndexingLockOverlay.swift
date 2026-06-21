@@ -190,7 +190,17 @@ struct IndexingLockOverlay: View {
 
         if let seconds = eta.estimatedSecondsRemaining(remaining: remaining) {
             let minutes = max(1, Int((seconds / 60).rounded(.up)))
-            Text("Photo \(indexed) of \(total) · about \(minutes) minute\(minutes == 1 ? "" : "s") left")
+            // Two-branch literal so the runtime `LocalizedStringKey` matches one
+            // of the two catalog entries verbatim. The previous form
+            // `…about %lld minute\(minutes == 1 ? "" : "s") left` produced the
+            // key `…about %lld minute%@ left` (the ternary becomes a `%@`
+            // placeholder), which matched neither catalog entry — so German
+            // devices silently rendered English.
+            if minutes == 1 {
+                Text("Photo \(indexed) of \(total) · about \(minutes) minute left")
+            } else {
+                Text("Photo \(indexed) of \(total) · about \(minutes) minutes left")
+            }
         } else {
             Text("Photo \(indexed) of \(total)")
         }

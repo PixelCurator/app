@@ -44,6 +44,7 @@ struct IndexingLockOverlay: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     // MARK: - Body
 
@@ -53,7 +54,7 @@ struct IndexingLockOverlay: View {
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
 
-            progressCard
+            cardContainer
                 .padding(.horizontal, 32)
                 .frame(maxWidth: 360)
                 .accessibilityElement(children: .contain)
@@ -87,6 +88,25 @@ struct IndexingLockOverlay: View {
                 ? .opacity
                 : .opacity.combined(with: .scale(scale: 1.02))
         )
+    }
+
+    // MARK: - Card container
+
+    /// At standard Dynamic Type sizes the card fits comfortably on every
+    /// device. At accessibility sizes (AX1+) the title + subtitle + caption
+    /// can push the card taller than an iPhone SE screen — wrap the card in
+    /// a ScrollView so users can still read everything. ScrollView is
+    /// transparent at standard sizes (no scroll bars, no behavior change)
+    /// because the content fits inside its frame.
+    @ViewBuilder
+    private var cardContainer: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            ScrollView(.vertical, showsIndicators: false) {
+                progressCard
+            }
+        } else {
+            progressCard
+        }
     }
 
     // MARK: - Backdrop
@@ -229,22 +249,26 @@ struct IndexingLockOverlay: View {
         ).post()
     }
 
-    /// Announces progress every 10 assets via VoiceOver on iOS / macOS.
+    /// Announces progress via VoiceOver on iOS / macOS, scaled so the user
+    /// hears roughly 20–30 progress beats regardless of library size.
+    ///
+    /// A fixed 10-asset step worked for 50k-asset libraries but went silent
+    /// for minutes on small ones (30 photos → only 3 announcements over the
+    /// whole run; for a 30k library → 3000 announcements would spam VO). The
+    /// step now scales with total: `max(1, total / 30)` — a 30-photo run
+    /// announces every photo; a 30000-photo run announces every 1000.
     ///
     /// The cross-platform `AccessibilityNotification.Announcement(_:).post()`
-    /// API is available on both iOS 17+ and macOS 14+, so we use it on both
-    /// paths instead of the old NSAccessibility / UIAccessibility split — the
-    /// previous macOS branch posted on `NSApp.mainWindow as Any`, which
-    /// silently no-ops when the lock is presented as a sheet.
+    /// API is available on both iOS 17+ and macOS 14+.
     private func announceProgressIfNeeded(indexed: Int) {
-        // Announce only every 10 assets to avoid spamming the user.
-        let milestone = (indexed / 10) * 10
+        let total = max(1, indexer.total)
+        let step = max(1, total / 30)
+        let milestone = (indexed / step) * step
         guard milestone > 0, milestone != lastAnnounced else { return }
         lastAnnounced = milestone
 
         guard voiceOverActive else { return }
 
-        let total = max(1, indexer.total)
         let message = "Indexed \(indexed) of \(total) photos."
         AccessibilityNotification.Announcement(message).post()
     }

@@ -17,6 +17,7 @@ struct SortingInboxView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PhotoController.self) private var library
     @Environment(\.embeddingIndexer) private var embeddingIndexer
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The coordinator owns the session state. Read from the environment so
     /// the view never captures an orphan after a variant switch (previously
@@ -448,7 +449,7 @@ struct SortingInboxView: View {
                             await showToast("Added to \(suggestion.albumTitle)")
                         }
                     }
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .transition(reduceMotion ? PCTransition.opacityOnly : PCTransition.scaleOpacity)
                 }
             }
             .animation(.smooth(duration: 0.35, extraBounce: 0.05), value: suggestions.map(\.albumTitle))
@@ -536,6 +537,11 @@ struct SortingInboxView: View {
     @MainActor
     private func showToast(_ message: String) async {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = message }
+        // VoiceOver only hears the toast if we post it as an announcement;
+        // the visible banner alone is not auto-announced because it appears
+        // and disappears (UpdatesFrequently is for content the user has
+        // already focused on).
+        VoiceOver.announce(message)
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = nil }
     }

@@ -91,7 +91,7 @@ struct PhotoGridView: View {
                                 selectedAsset = asset
                                 assignAssetItem = IdentifiableAsset(asset)
                             }
-                            .accessibilityLabel(Text("Photo"))
+                            .accessibilityLabel(photoAccessibilityLabel(for: asset))
                             .accessibilityHint(Text("Double-tap to add to an album. Long press for more options."))
                             .contextMenu {
                                 Button {
@@ -318,6 +318,7 @@ struct PhotoGridView: View {
     private func showToast(_ message: String) async {
         let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
+        VoiceOver.announce(message)
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }

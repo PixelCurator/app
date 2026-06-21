@@ -117,7 +117,7 @@ struct AlbumDetailView: View {
                                 selectedAsset = asset
                                 showingPhotoDialog = true
                             }
-                            .accessibilityLabel(Text("Photo"))
+                            .accessibilityLabel(photoAccessibilityLabel(for: asset))
                             .accessibilityHint(Text("Double-tap to remove or move this photo"))
                     }
                 }
@@ -219,6 +219,7 @@ struct AlbumDetailView: View {
     private func showToast(_ message: String) async {
         let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
+        VoiceOver.announce(message)
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }

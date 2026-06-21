@@ -421,7 +421,9 @@ private struct ThumbnailCell: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Rectangle().fill(.gray.opacity(0.15))
+                Rectangle()
+                    .fill(.gray.opacity(0.15))
+                    .shimmer(isAnimating: image == nil)
                 if let image {
                     Image(platformImage: image)
                         .resizable()

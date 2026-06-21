@@ -291,6 +291,7 @@ private struct AlbumThumbnailCell: View {
                         .transition(.opacity)
                 } else {
                     Rectangle().fill(.gray.opacity(0.15))
+                        .shimmer(isAnimating: true)
                         .transition(.opacity)
                 }
             }

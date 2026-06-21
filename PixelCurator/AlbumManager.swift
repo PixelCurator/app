@@ -1,5 +1,6 @@
 @preconcurrency import Photos
 import SwiftUI
+import OSLog
 
 // MARK: - AssignResolving (testable seam for SortingCoordinator)
 
@@ -29,6 +30,11 @@ protocol AssignResolving: AnyObject {
 @Observable
 final class AlbumManager: AlbumOperations, AssignResolving {
 
+    /// OSLog signposter for measuring main-thread time inside album reads /
+    /// writes. View in Instruments.app → "Logging" template (filter on
+    /// subsystem `yves.vogl.pixelcurator`, category `AlbumManager`).
+    static let signposter = OSSignposter(subsystem: "yves.vogl.pixelcurator", category: "AlbumManager")
+
     struct Album: Identifiable, Hashable {
         let id: String          // localIdentifier
         let title: String
@@ -41,10 +47,28 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     // MARK: - Read
 
     func loadAlbums() {
+        let signpostID = AlbumManager.signposter.makeSignpostID()
+        let state = AlbumManager.signposter.beginInterval("loadAlbums", id: signpostID)
+        defer { AlbumManager.signposter.endInterval("loadAlbums", state) }
+
         let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
         var collected: [Album] = []
         result.enumerateObjects { collection, _, _ in
-            let count = PHAsset.fetchAssets(in: collection, options: nil).count
+            // Use PhotoKit's fast-path count cache (`estimatedAssetCount`) instead
+            // of running a full `PHAsset.fetchAssets(in:).count` per album. The
+            // full fetch is O(assets-in-album) and was the dominant blocker of
+            // the main thread — a library with 50 albums × 10k photos spent
+            // multiple seconds inside this enumeration on every `loadAlbums()`
+            // call, which fires after every assign / remove / library-change.
+            //
+            // `estimatedAssetCount` returns `NSNotFound` when PhotoKit hasn't
+            // populated the cache yet (typically first cold open). Fall back to
+            // the precise fetch in that case so the count is never wrong, just
+            // potentially slow on the very first read.
+            let estimated = collection.estimatedAssetCount
+            let count = estimated == NSNotFound
+                ? PHAsset.fetchAssets(in: collection, options: nil).count
+                : estimated
             collected.append(Album(
                 id: collection.localIdentifier,
                 title: collection.localizedTitle ?? "Untitled",

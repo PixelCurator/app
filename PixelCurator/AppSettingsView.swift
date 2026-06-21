@@ -52,8 +52,13 @@ struct AppSettingsView: View {
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
+                    // `role: .destructive` already paints the label red on iOS
+                    // and matches the system destructive tint on macOS
+                    // (including under Increase Contrast). An explicit
+                    // `.foregroundStyle(.red)` overrides the system-adaptive
+                    // tint inconsistently, especially on macOS, so we don't
+                    // set one.
                     Label("Delete Index", systemImage: "trash")
-                        .foregroundStyle(.red)
                 }
                 .accessibilityIdentifier("settings-delete-index")
                 .confirmationDialog(

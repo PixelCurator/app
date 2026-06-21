@@ -6,6 +6,7 @@
 //  `PCAnimation.*`, `PCTransition.*`, `.polishedButton`, and `.shimmer(…)`.
 
 import SwiftUI
+import Photos
 
 // MARK: - PCAnimation
 
@@ -206,6 +207,61 @@ extension View {
         modifier(ShimmerModifier(isAnimating: isAnimating))
     }
 }
+
+// MARK: - Photo accessibility label
+
+/// Builds the VoiceOver label for a `PHAsset` thumbnail cell.
+///
+/// Without a distinguishing detail every cell announces as "Photo" — a grid
+/// of "Photo, Photo, Photo, …" is unusable for VO orientation. When the
+/// asset has a `creationDate` we include a short localized date so users can
+/// place each photo in time. Without one we fall back to the plain key
+/// `"Photo"`, which the catalog already covers in DE as `"Foto"`.
+@MainActor
+func photoAccessibilityLabel(for asset: PHAsset) -> Text {
+    if let date = asset.creationDate {
+        return Text("Photo from \(date, format: .dateTime.month().day().year())")
+    } else {
+        return Text("Photo")
+    }
+}
+
+// MARK: - VoiceOver helpers
+
+/// Cross-platform helpers for posting VoiceOver announcements.
+///
+/// Toast banners that show up and disappear cannot rely on
+/// `accessibilityAddTraits(.updatesFrequently)` — that trait announces a value
+/// the user has navigated to, but toasts are transient by design. Posting an
+/// announcement at the moment the toast appears is the only reliable way for
+/// VoiceOver users to hear it.
+enum VoiceOver {
+    /// `true` when VoiceOver is actively listening.
+    static var isRunning: Bool {
+        #if canImport(UIKit)
+        return UIAccessibility.isVoiceOverRunning
+        #elseif canImport(AppKit)
+        return NSWorkspace.shared.isVoiceOverEnabled
+        #else
+        return false
+        #endif
+    }
+
+    /// Posts `message` to VoiceOver if (and only if) the user is listening.
+    /// Uses the modern cross-platform `AccessibilityNotification.Announcement`
+    /// API available on iOS 17 / macOS 14.
+    static func announce(_ message: String) {
+        guard isRunning else { return }
+        AccessibilityNotification.Announcement(message).post()
+    }
+}
+
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - SensoryFeedbackHelper (documentation)
 

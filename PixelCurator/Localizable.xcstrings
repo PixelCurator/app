@@ -1080,6 +1080,16 @@
           }
         }
       }
+    },
+    "Photo from %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto vom %@"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -790,6 +790,116 @@
           }
         }
       }
+    },
+    "Delete Index": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Index löschen"
+          }
+        }
+      }
+    },
+    "Delete and Rebuild": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Löschen und neu aufbauen"
+          }
+        }
+      }
+    },
+    "Delete and rebuild the index?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Index löschen und neu aufbauen?"
+          }
+        }
+      }
+    },
+    "PixelCurator will reanalyze every photo. This can take several minutes.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PixelCurator analysiert alle deine Fotos erneut. Das kann einige Minuten dauern."
+          }
+        }
+      }
+    },
+    "Index": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Index"
+          }
+        }
+      }
+    },
+    "Reset the index if album suggestions feel wrong. The app stays locked while rebuilding.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setze den Index zurück, wenn Album-Vorschläge nicht stimmen. Die App bleibt gesperrt, bis der Aufbau abgeschlossen ist."
+          }
+        }
+      }
+    },
+    "Rebuilding your index": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dein Index wird neu aufgebaut"
+          }
+        }
+      }
+    },
+    "Keep PixelCurator open. You can switch apps briefly — we'll keep working in the background for a few minutes.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lass PixelCurator geöffnet. Du kannst kurz zwischen Apps wechseln – wir arbeiten noch ein paar Minuten im Hintergrund weiter."
+          }
+        }
+      }
+    },
+    "Photo %lld of %lld": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto %lld von %lld"
+          }
+        }
+      }
+    },
+    "Photo %lld of %lld · about %lld minute left": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto %lld von %lld · noch ca. %lld Minute"
+          }
+        }
+      }
+    },
+    "Photo %lld of %lld · about %lld minutes left": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto %lld von %lld · noch ca. %lld Minuten"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

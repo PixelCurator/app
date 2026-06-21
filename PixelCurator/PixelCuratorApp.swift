@@ -1,5 +1,11 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 @main
 struct PixelCuratorApp: App {
@@ -66,6 +72,21 @@ struct PixelCuratorApp: App {
                 .environment(\.decisionLog, sharedDecisionLog)
                 .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
+                // App-wide indexing lock: presented whenever the indexer is
+                // actively running. Using .fullScreenCover keeps it above
+                // sheets and navigation stacks; interactiveDismissDisabled
+                // prevents swipe-to-dismiss while the rebuild is in flight.
+                .fullScreenCover(isPresented: Binding(
+                    get: { indexer?.isIndexing == true },
+                    set: { _ in } // read-only; dismissal is gated below
+                )) {
+                    if let liveIndexer = indexer {
+                        IndexingLockOverlay(indexer: liveIndexer)
+                            .interactiveDismissDisabled()
+                            .task { beginBackgroundIndexingTask() }
+                            .onDisappear { endBackgroundIndexingTask() }
+                    }
+                }
         }
         #if os(macOS)
         .defaultSize(width: 900, height: 700)
@@ -77,11 +98,73 @@ struct PixelCuratorApp: App {
         // same `@AppStorage("hideICloudPhotos")` key is read by `PhotoGridView`,
         // which mirrors it into `PhotoController.hideICloudPhotos`, so flipping
         // the toggle here propagates to the grid filter on the next render.
+        //
+        // The Settings scene is separate from the WindowGroup so it does NOT
+        // inherit `.modelContainer(modelContainer)` or the injected environments
+        // automatically. We re-inject the subset that `AppSettingsView` needs so
+        // the Index Reset button is functional from the macOS Settings pane.
         Settings {
             AppSettingsView()
+                .environment(library)
+                .environment(\.embeddingIndexer, indexer)
+                .environment(\.activeVariant, activeVariant)
+                .modelContainer(modelContainer)
         }
         #endif
     }
+
+    // MARK: - Background task management
+
+    /// iOS: a `UIBackgroundTask` bought by `beginBackgroundTaskWithName(_:expirationHandler:)`
+    /// gives the app up to ~30 s of extra CPU after the user backgrounds it
+    /// while indexing is in flight. No new entitlements needed — this is the
+    /// standard background-task API available to every app.
+    ///
+    /// macOS: a `NSProcessInfo.Activity` with `.userInitiated` keeps the process
+    /// alive and prevents App Nap while the index rebuild runs.
+    ///
+    /// Both ends are cleaned up in `endBackgroundIndexingTask()`, which is called
+    /// when the `IndexingLockOverlay` disappears (i.e. indexing finished).
+    #if canImport(UIKit)
+    @State private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    @MainActor
+    private func beginBackgroundIndexingTask() {
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "PixelCurator.IndexRebuild") {
+            // Expiration handler: iOS is about to suspend us. End the task
+            // gracefully so the system doesn't kill the process outright.
+            UIApplication.shared.endBackgroundTask(self.backgroundTaskID)
+            self.backgroundTaskID = .invalid
+        }
+    }
+
+    @MainActor
+    private func endBackgroundIndexingTask() {
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
+    }
+    #elseif canImport(AppKit)
+    @State private var activityToken: NSObjectProtocol?
+
+    @MainActor
+    private func beginBackgroundIndexingTask() {
+        guard activityToken == nil else { return }
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiated,
+            reason: "Rebuilding photo index"
+        )
+    }
+
+    @MainActor
+    private func endBackgroundIndexingTask() {
+        if let token = activityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            activityToken = nil
+        }
+    }
+    #endif
 
     // MARK: - Boot
 

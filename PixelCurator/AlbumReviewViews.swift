@@ -171,45 +171,33 @@ struct AlbumDetailView: View {
 
     // MARK: - Move flow
 
-    /// Moves `asset` from `source` to `target` as an assign-then-remove pair.
+    /// Moves `asset` from `source` to `target` via the pure `AlbumMover`,
+    /// then maps the `MoveOutcome` to a toast and triggers a reload.
     ///
-    /// Failure handling:
-    /// - If the assign fails, the asset stays in `source`; we report the error.
-    /// - If the remove fails after a successful assign, the asset is now in
-    ///   *both* albums. We attempt to roll back the assign by removing the
-    ///   asset from `target` by its `localIdentifier` (not by title — Photos
-    ///   allows duplicate-named albums, and a title-based lookup might delete
-    ///   the wrong collection's membership). If the rollback also fails, we
-    ///   surface the double-assign explicitly rather than hide it.
+    /// The orchestration logic lives in `AlbumMover` (tested without PhotoKit
+    /// via `MoveFlowTests`); this method just renders the result and refreshes
+    /// the visible asset list.
     @MainActor
     private func move(
         _ asset: PHAsset,
         from source: AlbumManager.Album,
         to target: AlbumManager.Album
     ) async {
-        let added = await albumManager.assign(asset, toAlbumNamed: target.title)
-        guard added else {
-            await showToast(albumManager.lastError ?? "Move failed — could not add to \(target.title).")
-            await loadAssets()
-            return
-        }
+        let outcome = await AlbumMover.move(
+            asset,
+            from: (id: source.id, title: source.title),
+            to: (id: target.id, title: target.title),
+            via: albumManager
+        )
 
-        // Remove from source by localIdentifier — Photos permits duplicate
-        // album titles, so a title-based remove could mutate the wrong album.
-        let removed = await albumManager.remove(asset, fromAlbumWithID: source.id)
-        if removed {
-            await showToast("Moved to \(target.title)")
-            await loadAssets()
-            return
-        }
-
-        // Remove failed after assign succeeded → asset is currently in both
-        // albums. Try to roll back the assign by removing it from target.
-        let rolledBack = await albumManager.remove(asset, fromAlbumWithID: target.id)
-        if rolledBack {
-            await showToast("Move failed — asset kept in \(source.title).")
-        } else {
-            // Rollback failed too — be explicit so the user can fix it manually.
+        switch outcome {
+        case .moved(_, let targetTitle):
+            await showToast("Moved to \(targetTitle)")
+        case .assignFailed(let targetTitle, _):
+            await showToast(albumManager.lastError ?? "Move failed — could not add to \(targetTitle).")
+        case .removeFailedRolledBack(let sourceTitle, _):
+            await showToast("Move failed — asset kept in \(sourceTitle).")
+        case .orphanInBothAlbums:
             await showToast("Move partially failed — please review in Photos.app.")
         }
         await loadAssets()

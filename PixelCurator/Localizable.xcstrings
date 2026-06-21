@@ -826,7 +826,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "PixelCurator analysiert alle deine Fotos erneut. Das kann einige Minuten dauern."
+            "value": "PixelCurator analysiert jedes Foto neu. Das kann einige Minuten dauern."
           }
         }
       }
@@ -846,7 +846,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Setze den Index zurück, wenn Album-Vorschläge nicht stimmen. Die App bleibt gesperrt, bis der Aufbau abgeschlossen ist."
+            "value": "Setze den Index zurück, wenn Album-Vorschläge nicht passen. Die App bleibt gesperrt, bis der Aufbau abgeschlossen ist."
           }
         }
       }
@@ -856,7 +856,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dein Index wird neu aufgebaut"
+            "value": "Index wird neu aufgebaut"
           }
         }
       }
@@ -866,7 +866,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lass PixelCurator geöffnet. Du kannst kurz zwischen Apps wechseln – wir arbeiten noch ein paar Minuten im Hintergrund weiter."
+            "value": "Lass PixelCurator geöffnet. Du kannst kurz zu einer anderen App wechseln – wir arbeiten dann noch wenige Minuten im Hintergrund weiter."
           }
         }
       }
@@ -897,6 +897,186 @@
           "stringUnit": {
             "state": "translated",
             "value": "Foto %lld von %lld · noch ca. %lld Minuten"
+          }
+        }
+      }
+    },
+    "Loading albums": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alben werden geladen"
+          }
+        }
+      }
+    },
+    "Opens album to view and manage photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet das Album, um Fotos anzusehen und zu verwalten"
+          }
+        }
+      }
+    },
+    "Photo": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto"
+          }
+        }
+      }
+    },
+    "Double-tap to remove or move this photo": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppeltippen, um dieses Foto zu entfernen oder zu verschieben"
+          }
+        }
+      }
+    },
+    "%lld photos to sort": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Fotos zu sortieren"
+          }
+        }
+      }
+    },
+    "Opens the sorting inbox": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet den Light-Table-Eingang"
+          }
+        }
+      }
+    },
+    "Double-tap to add to an album. Long press for more options.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppeltippen, um zu einem Album hinzuzufügen. Lange tippen für weitere Optionen."
+          }
+        }
+      }
+    },
+    "Indexing photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fotos werden indiziert"
+          }
+        }
+      }
+    },
+    "%lld of %lld": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld von %lld"
+          }
+        }
+      }
+    },
+    "%@, %lld percent match": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, %lld Prozent Übereinstimmung"
+          }
+        }
+      }
+    },
+    "Double-tap to assign photo to this album": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppeltippen, um das Foto diesem Album zuzuordnen"
+          }
+        }
+      }
+    },
+    "Query photo — searching for visually similar photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ausgangsfoto – Suche nach visuell ähnlichen Fotos"
+          }
+        }
+      }
+    },
+    "Opens album picker to assign selected photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet die Albumauswahl, um die ausgewählten Fotos zuzuordnen"
+          }
+        }
+      }
+    },
+    "%lld sorted, %lld remaining": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sortiert, %lld verbleibend"
+          }
+        }
+      }
+    },
+    "Indexed %lld of %lld photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld von %lld Fotos indiziert"
+          }
+        }
+      }
+    },
+    "Assign to %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu %@ zuordnen"
+          }
+        }
+      }
+    },
+    "Double-tap to assign the current photo to this album": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppeltippen, um das aktuelle Foto diesem Album zuzuordnen"
+          }
+        }
+      }
+    },
+    "%lld percent confidence, %lld similar photos": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Prozent Konfidenz, %lld ähnliche Fotos"
           }
         }
       }

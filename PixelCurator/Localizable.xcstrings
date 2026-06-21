@@ -801,12 +801,12 @@
         }
       }
     },
-    "Delete and Rebuild": {
+    "Delete and Rebuild Index": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Löschen und neu aufbauen"
+            "value": "Index löschen und neu aufbauen"
           }
         }
       }

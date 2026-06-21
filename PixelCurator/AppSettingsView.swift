@@ -66,7 +66,7 @@ struct AppSettingsView: View {
                     isPresented: $showDeleteConfirmation,
                     titleVisibility: .visible
                 ) {
-                    Button("Delete and Rebuild", role: .destructive) {
+                    Button("Delete and Rebuild Index", role: .destructive) {
                         Task { await resetIndex() }
                     }
                     Button("Cancel", role: .cancel) {}

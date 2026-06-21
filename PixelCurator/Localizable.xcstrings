@@ -1090,6 +1090,26 @@
           }
         }
       }
+    },
+    "Moves to the next photo without assigning": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geht zum nächsten Foto, ohne zuzuordnen"
+          }
+        }
+      }
+    },
+    "Opens album picker to choose a different album": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet die Albumauswahl, um ein anderes Album zu wählen"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

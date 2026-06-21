@@ -251,7 +251,7 @@ struct SortingInboxView: View {
                     }
                 }
             }
-            Button("➕ New album…") {
+            Button("New album…") {
                 let assets = coordinator.queue.filter { selectedIDs.contains($0.localIdentifier) }
                 presentNewAlbumSheet { chosenTitle in
                     Task {
@@ -329,7 +329,7 @@ struct SortingInboxView: View {
                     }
                 }
             }
-            Button("➕ New album…") {
+            Button("New album…") {
                 presentNewAlbumSheet { chosenTitle in
                     Task {
                         await coordinator.assignTo(albumNamed: chosenTitle)
@@ -441,23 +441,27 @@ struct SortingInboxView: View {
 
     private var actionRow: some View {
         HStack(spacing: 16) {
-            Button(role: .cancel) {
+            // Skip is a forward action ("next photo"), not a cancel. Drop the
+            // `.cancel` role so VoiceOver doesn't announce it as "Cancel".
+            Button {
                 coordinator.skip()
             } label: {
-                Label("Skip", systemImage: "arrow.right")
-                    .frame(maxWidth: .infinity)
+                Label("Skip", systemImage: "forward")
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .accessibilityIdentifier("inbox-skip")
 
             Button {
                 showAlbumPicker = true
             } label: {
                 Label("Other…", systemImage: "folder.badge.plus")
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .accessibilityIdentifier("inbox-other-album")
         }
     }
 
@@ -484,19 +488,14 @@ struct SortingInboxView: View {
     // MARK: - Inbox zero
 
     private var inboxZeroView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "tray")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
-            Text("All Sorted")
-                .font(.title2.bold())
-            Text("All indexed photos are already sorted into albums. Keep indexing more photos to get suggestions here.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-        }
-        .padding()
+        // HIG: ContentUnavailableView is the canonical empty-state container
+        // (iOS 17 / macOS 14+). It handles layout, typography, Dynamic Type,
+        // and VoiceOver grouping correctly out of the box.
+        ContentUnavailableView(
+            "All Sorted",
+            systemImage: "tray",
+            description: Text("All indexed photos are already sorted into albums. Keep indexing more photos to get suggestions here.")
+        )
     }
 
     // MARK: - Helpers

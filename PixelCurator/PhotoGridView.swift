@@ -54,21 +54,27 @@ struct PhotoGridView: View {
                     Button {
                         onShowInbox()
                     } label: {
-                        HStack {
+                        HStack(spacing: 8) {
                             // Icon is interpolated INTO the Text (not a standalone
                             // Image) so it renders no separate accessibility image
                             // element above the grid — otherwise `app.images`
                             // queries would match it instead of a grid thumbnail.
+                            // The arrow stays inside the Text for the same reason.
                             Text("\(unsortedCount) photos to sort →")
-                                .fontWeight(.medium)
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.primary)
                             Spacer()
                         }
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        // 16pt vertical padding + body text → ≥44pt touch target
+                        // per Apple HIG (iOS minimum hit area).
+                        .padding(.vertical, 16)
+                        .frame(minHeight: 44)
                         .background(.thinMaterial)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("inbox-cta")
+                    .accessibilityHint(Text("Opens the sorting inbox"))
                 }
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(library.visibleAssets, id: \.localIdentifier) { asset in
@@ -94,13 +100,32 @@ struct PhotoGridView: View {
             }
             .navigationTitle("PixelCurator")
             .toolbar {
+                // Undo lives on the leading edge per HIG: it's a reversal of a
+                // prior decision, not a primary action on the current screen.
+                #if os(iOS)
+                ToolbarItem(placement: .topBarLeading) {
+                    undoToolbarButton
+                }
+                #else
+                ToolbarItem(placement: .navigation) {
+                    undoToolbarButton
+                }
+                #endif
+
                 if let indexer, indexer.isIndexing {
+                    #if os(iOS)
+                    ToolbarItem(placement: .principal) {
+                        indexingProgressView(indexer: indexer)
+                    }
+                    #else
                     ToolbarItem(placement: .automatic) {
                         indexingProgressView(indexer: indexer)
                     }
+                    #endif
                 }
+
                 #if os(iOS)
-                ToolbarItem(placement: .automatic) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAppSettings = true
                     } label: {
@@ -108,8 +133,7 @@ struct PhotoGridView: View {
                     }
                     .accessibilityIdentifier("toolbar-app-settings")
                 }
-                #endif
-                ToolbarItem(placement: .automatic) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showVariantSettings = true
                     } label: {
@@ -117,24 +141,16 @@ struct PhotoGridView: View {
                     }
                     .accessibilityIdentifier("toolbar-variant-settings")
                 }
-                ToolbarItem(placement: .automatic) {
+                #else
+                ToolbarItem(placement: .primaryAction) {
                     Button {
-                        Task {
-                            await decisionLog?.undo()
-                            if let name = decisionLog?.lastUndoneAlbumName {
-                                await showToast("Removed from \(name)")
-                            } else if let error = decisionLog?.lastUndoError {
-                                // Surface the failure — otherwise the user
-                                // sees nothing and assumes Undo is broken.
-                                await showToast(error)
-                            }
-                        }
+                        showVariantSettings = true
                     } label: {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
+                        Label("Quality", systemImage: "cpu")
                     }
-                    .disabled(!(decisionLog?.canUndo ?? false))
-                    .accessibilityIdentifier("toolbar-undo")
+                    .accessibilityIdentifier("toolbar-variant-settings")
                 }
+                #endif
             }
             .overlay(alignment: .bottom) {
                 if let toast {
@@ -218,6 +234,28 @@ struct PhotoGridView: View {
                 unsortedCount = sortingCoordinator?.unsortedCount() ?? 0
             }
         }
+    }
+
+    // MARK: - Undo toolbar button
+
+    @ViewBuilder
+    private var undoToolbarButton: some View {
+        Button {
+            Task {
+                await decisionLog?.undo()
+                if let name = decisionLog?.lastUndoneAlbumName {
+                    await showToast("Removed from \(name)")
+                } else if let error = decisionLog?.lastUndoError {
+                    // Surface the failure — otherwise the user
+                    // sees nothing and assumes Undo is broken.
+                    await showToast(error)
+                }
+            }
+        } label: {
+            Label("Undo", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(!(decisionLog?.canUndo ?? false))
+        .accessibilityIdentifier("toolbar-undo")
     }
 
     // MARK: - Indexing progress

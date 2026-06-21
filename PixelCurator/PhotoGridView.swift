@@ -29,6 +29,7 @@ struct PhotoGridView: View {
 
     @Environment(\.sortingCoordinator) private var sortingCoordinator
     @Environment(\.decisionLog) private var decisionLog
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isSwitchingVariant) private var isSwitchingVariant
 
     @State private var selectedAsset: PHAsset?
@@ -304,9 +305,13 @@ struct PhotoGridView: View {
 
     @MainActor
     private func showToast(_ message: String) async {
-        withAnimation { toast = message }
+        // HIG accessibility: respect Reduce Motion. Pass `nil` to disable the
+        // implicit slide-in animation when the user opts out, while keeping
+        // the state change so the toast still appears.
+        let animation: Animation? = reduceMotion ? nil : .default
+        withAnimation(animation) { toast = message }
         try? await Task.sleep(for: .seconds(2))
-        withAnimation { toast = nil }
+        withAnimation(animation) { toast = nil }
     }
 }
 

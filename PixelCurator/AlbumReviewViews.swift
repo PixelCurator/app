@@ -70,6 +70,7 @@ struct AlbumDetailView: View {
 
     @Environment(AlbumManager.self) private var albumManager
     @Environment(PhotoController.self) private var library
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var assets: [PHAsset] = []
     @State private var selectedAsset: PHAsset?
@@ -203,9 +204,10 @@ struct AlbumDetailView: View {
 
     @MainActor
     private func showToast(_ message: String) async {
-        withAnimation { toast = message }
+        let animation: Animation? = reduceMotion ? nil : .default
+        withAnimation(animation) { toast = message }
         try? await Task.sleep(for: .seconds(2))
-        withAnimation { toast = nil }
+        withAnimation(animation) { toast = nil }
     }
 
     @ViewBuilder

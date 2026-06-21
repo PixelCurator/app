@@ -619,6 +619,12 @@ private struct SuggestionChip: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            // HIG: minimum 44pt tappable target — matters for motor-control
+            // users and for VoiceOver Switch Control. The visual chip height
+            // is around 50pt with the current padding, but `frame(minHeight:)`
+            // makes the contract explicit so future copy changes can't shrink
+            // the hit area below the 44pt threshold.
+            .frame(minHeight: 44)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)

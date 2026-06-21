@@ -471,6 +471,7 @@ struct SortingInboxView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .accessibilityIdentifier("inbox-skip")
+            .accessibilityHint(Text("Moves to the next photo without assigning"))
 
             Button {
                 showAlbumPicker = true
@@ -481,6 +482,7 @@ struct SortingInboxView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .accessibilityIdentifier("inbox-other-album")
+            .accessibilityHint(Text("Opens album picker to choose a different album"))
         }
     }
 

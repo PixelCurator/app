@@ -1,5 +1,11 @@
 import SwiftUI
 import Photos
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - SortingInboxView
 
@@ -629,6 +635,7 @@ private struct SuggestionChip: View {
     let onAccept: () -> Void
 
     @State private var chipFeedbackTrigger: Bool = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         Button {
@@ -661,7 +668,12 @@ private struct SuggestionChip: View {
             // makes the contract explicit so future copy changes can't shrink
             // the hit area below the 44pt threshold.
             .frame(minHeight: 44)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // Audit S-4: `.thinMaterial` could drop below 4.5:1 contrast for
+            // the .secondary caption against bright wallpapers. `.regularMaterial`
+            // is more opaque and pushes contrast back into safe territory.
+            // Under Reduce Transparency we fall back to an opaque system color
+            // — the same pattern as IndexingLockOverlay's card background.
+            .background(chipBackgroundStyle, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(PolishedButtonStyle())
         .accessibilityLabel(Text("Assign to \(suggestion.albumTitle)"))
@@ -670,5 +682,18 @@ private struct SuggestionChip: View {
         #if os(iOS)
         .sensoryFeedback(.impact(weight: .light), trigger: chipFeedbackTrigger)
         #endif
+    }
+
+    /// Glass when transparency is allowed; an opaque system color otherwise.
+    private var chipBackgroundStyle: AnyShapeStyle {
+        if reduceTransparency {
+            #if canImport(UIKit)
+            return AnyShapeStyle(Color(UIColor.secondarySystemBackground))
+            #else
+            return AnyShapeStyle(Color(NSColor.controlBackgroundColor))
+            #endif
+        } else {
+            return AnyShapeStyle(.regularMaterial)
+        }
     }
 }

@@ -85,6 +85,10 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     /// `loadAlbums()` call is required. Returns an empty array if the collection
     /// cannot be found or the app lacks photo-library access.
     func memberAssetIDs(of albumLocalIdentifier: String) -> [String] {
+        let signpostID = AlbumManager.signposter.makeSignpostID()
+        let state = AlbumManager.signposter.beginInterval("memberAssetIDs", id: signpostID)
+        defer { AlbumManager.signposter.endInterval("memberAssetIDs", state) }
+
         let result = PHAssetCollection.fetchAssetCollections(
             withLocalIdentifiers: [albumLocalIdentifier], options: nil
         )

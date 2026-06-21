@@ -225,21 +225,35 @@ struct AlbumDetailView: View {
     @MainActor
     private func loadAssets() async {
         defer { didLoadOnce = true }
-        let ids = albumManager.memberAssetIDs(of: album.id)
-        guard !ids.isEmpty else {
-            assets = []
-            return
-        }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-        // Preserve the order returned by memberAssetIDs (album order).
-        let fetched: [String: PHAsset] = {
+        let albumID = album.id
+        // Run the PhotoKit fetches off the main actor. Large albums (thousands
+        // of assets) make `PHAssetCollection.fetchAssetCollections` +
+        // `PHAsset.fetchAssets(in:)` cost enough to be felt as a multi-second
+        // freeze when the user enters an album detail view. The fetch results
+        // themselves are thread-safe to enumerate; only the resulting
+        // `[PHAsset]` is hopped back to the main actor for state assignment.
+        let resolved: [PHAsset] = await Task.detached { () -> [PHAsset] in
+            // Resolve the collection on this background task to avoid
+            // touching `albumManager` from off-main.
+            let collectionResult = PHAssetCollection.fetchAssetCollections(
+                withLocalIdentifiers: [albumID], options: nil
+            )
+            guard let collection = collectionResult.firstObject else { return [] }
+            var ids: [String] = []
+            let memberFetch = PHAsset.fetchAssets(in: collection, options: nil)
+            memberFetch.enumerateObjects { asset, _, _ in
+                ids.append(asset.localIdentifier)
+            }
+            guard !ids.isEmpty else { return [] }
+            let assetFetch = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
             var map: [String: PHAsset] = [:]
-            result.enumerateObjects { asset, _, _ in
+            assetFetch.enumerateObjects { asset, _, _ in
                 map[asset.localIdentifier] = asset
             }
-            return map
-        }()
-        assets = ids.compactMap { fetched[$0] }
+            // Preserve album order from the membership fetch.
+            return ids.compactMap { map[$0] }
+        }.value
+        assets = resolved
     }
 }
 

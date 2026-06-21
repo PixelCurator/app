@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 // MARK: - AlbumSuggestion
 
@@ -39,6 +40,12 @@ struct AlbumSuggestion: Identifiable, Hashable {
 ///    and delegates to `rank`.
 @MainActor
 final class AlbumSuggester {
+
+    /// OSLog signposter for measuring main-thread time inside the
+    /// `suggestions(for:...)` hot path. View in Instruments.app → "Logging"
+    /// template (filter on subsystem `yves.vogl.pixelcurator`,
+    /// category `AlbumSuggester`).
+    static let signposter = OSSignposter(subsystem: "yves.vogl.pixelcurator", category: "AlbumSuggester")
 
     // MARK: - Pure ranking (testable)
 
@@ -138,39 +145,60 @@ final class AlbumSuggester {
         corrections: CorrectionStore? = nil,
         k: Int = 15
     ) -> [AlbumSuggestion] {
-        // Step 1: resolve query embedding.
-        guard let queryEmbedding = store.embedding(assetID: queryAssetID, modelID: modelID) else {
+        let signpostID = AlbumSuggester.signposter.makeSignpostID()
+        let state = AlbumSuggester.signposter.beginInterval("suggestions", id: signpostID)
+        defer { AlbumSuggester.signposter.endInterval("suggestions", state) }
+
+        // Step 1: batch-load every embedding for this variant in ONE SwiftData
+        // fetch and index it by assetID. Pre-PR-this, this method called
+        // `store.embedding(assetID:modelID:)` once per album member, and each
+        // such call ran a `context.fetch(FetchDescriptor<PhotoEmbedding>())`
+        // over the entire table (an iOS 26 SwiftData #Predicate workaround —
+        // see EmbeddingStore.swift). For N embedded photos, M total album
+        // memberships and A albums, that was ~N*M Swift-side iterations per
+        // suggestion request. On a 5 000-photo / 50-album library that
+        // produced multi-second freezes when tapping a thumbnail.
+        //
+        // The fix is structural: hydrate once, then do O(1) dictionary
+        // lookups. The behavioural contract (which embeddings vote, how
+        // they're weighted, the corrections fold-in) is unchanged.
+        let rows = store.allEmbeddings(modelID: modelID)
+        var embeddingByID: [String: [Float]] = [:]
+        embeddingByID.reserveCapacity(rows.count)
+        for row in rows {
+            embeddingByID[row.assetID] = row.floats
+        }
+
+        // Step 2: resolve query embedding from the in-memory dictionary.
+        guard let queryVector = embeddingByID[queryAssetID] else {
             return []
         }
-        let queryVector = queryEmbedding.floats
 
-        // Step 2: build labeled corpus.
+        // Step 3: build labeled corpus from album membership using O(1) lookups.
         var labeledPoints: [(album: String, vector: [Float])] = []
         for album in albumManager.albums {
             let memberIDs = albumManager.memberAssetIDs(of: album.id)
             for memberID in memberIDs {
                 // Exclude the query asset itself.
                 guard memberID != queryAssetID else { continue }
-                guard let memberEmbedding = store.embedding(assetID: memberID, modelID: modelID) else {
-                    continue
-                }
-                labeledPoints.append((album: album.title, vector: memberEmbedding.floats))
+                guard let memberVector = embeddingByID[memberID] else { continue }
+                labeledPoints.append((album: album.title, vector: memberVector))
             }
         }
 
-        // Step 2b: fold in user corrections as additional labeled points (equal
+        // Step 3b: fold in user corrections as additional labeled points (equal
         // weight). A correction "asset X → album A" means X is an example of A;
         // this is the lightweight on-device "retrain" — past overrides nudge
         // future suggestions toward what the user actually chose.
         if let corrections {
             for correction in corrections.corrections(modelID: modelID) {
                 guard correction.assetID != queryAssetID else { continue }
-                guard let memberEmbedding = store.embedding(assetID: correction.assetID, modelID: modelID) else { continue }
-                labeledPoints.append((album: correction.albumName, vector: memberEmbedding.floats))
+                guard let memberVector = embeddingByID[correction.assetID] else { continue }
+                labeledPoints.append((album: correction.albumName, vector: memberVector))
             }
         }
 
-        // Step 3: rank.
+        // Step 4: rank.
         return AlbumSuggester.rank(query: queryVector, labeledPoints: labeledPoints, k: k)
     }
 }

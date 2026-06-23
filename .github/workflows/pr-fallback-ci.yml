@@ -1,0 +1,93 @@
+# Manual fallback for the "CI - Pull Requests" Xcode Cloud workflow when
+# Xcode Cloud's monthly compute quota (25h on the free Apple Developer
+# tier) is exhausted. Trigger from the Actions tab or via:
+#
+#   gh workflow run pr-fallback-ci.yml --ref <branch>
+#
+# Why manual: GitHub Actions counts macOS minutes at 10x toward the free
+# 2000-minute monthly budget on private repos. A single AllTests run is
+# ~20 min wall-clock = 200 effective minutes — keeping this opt-in
+# prevents silently burning the whole month.
+#
+# What runs: xcodegen + xcodebuild test against the UnitTests plan on an
+# iOS Simulator. This mirrors what Xcode Cloud's PR workflow does so the
+# signal is comparable. UI tests are excluded because GitHub Actions
+# macOS runners have documented UI-test flakiness even worse than the
+# local iOS 26 sim.
+name: PR Fallback CI (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch / SHA / tag to test (default: triggering ref)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: xcodebuild test (UnitTests plan, iOS Simulator)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Pick a stable iOS simulator
+        id: sim
+        run: |
+          # Prefer the newest iOS runtime available on the runner. Fall back
+          # to whatever the runner ships if iOS 18 isn't installed.
+          DESTINATION="platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices available | head -40
+
+      - name: Build for testing
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project PixelCurator.xcodeproj \
+            -scheme PixelCurator \
+            -destination "${{ steps.sim.outputs.destination }}" \
+            -testPlan UnitTests \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Run UnitTests plan
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project PixelCurator.xcodeproj \
+            -scheme PixelCurator \
+            -destination "${{ steps.sim.outputs.destination }}" \
+            -testPlan UnitTests \
+            -resultBundlePath build/UnitTests.xcresult
+
+      - name: Upload xcresult bundle
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: UnitTests-xcresult
+          path: build/UnitTests.xcresult
+          if-no-files-found: warn
+          retention-days: 7

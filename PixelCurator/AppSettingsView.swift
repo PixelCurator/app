@@ -106,11 +106,21 @@ struct AppSettingsView: View {
     private func resetIndex() async {
         guard let indexer else { return }
 
-        // 1. Wipe all stored embeddings for the current variant.
+        // 1. Stop any in-flight indexing first. Without cancelAndWait the parallel
+        //    `runIndex` loop keeps writing rows AFTER deleteAll, producing a
+        //    non-deterministic mix of pre-reset and post-reset embeddings
+        //    (backlog F-01).
+        await indexer.cancelAndWait()
+
+        // 2. Wipe stored embeddings AND user corrections for the current variant.
+        //    Settings copy promises this fixes "suggestions feel wrong" — the
+        //    suggestions are shaped by both stores, so wiping only embeddings
+        //    leaves the user's complaint un-addressed (backlog F-19).
         EmbeddingStore(context: modelContext).deleteAll(modelID: activeVariant.modelID)
+        CorrectionStore(context: modelContext).deleteAll(modelID: activeVariant.modelID)
         try? modelContext.save()
 
-        // 2. Re-index everything. `indexer.index(assets:)` sets `isIndexing = true`
+        // 3. Re-index everything. `indexer.index(assets:)` sets `isIndexing = true`
         //    which the top-level lock overlay observes and presents itself.
         //    Background-task wrapping lives in PixelCuratorApp, not here.
         await indexer.index(assets: library.assets)

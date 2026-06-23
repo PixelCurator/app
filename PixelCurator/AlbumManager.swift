@@ -44,6 +44,19 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     var albums: [Album] = []
     var lastError: String?
 
+    // MARK: - Dependencies
+
+    /// The PhotoKit seam. Production wiring injects `LivePHPhotoLibraryAdapter`
+    /// (the real `PHPhotoLibrary.shared()` singleton); tests inject a fake.
+    /// All album mutation funnels through `adapter.performChanges` so the
+    /// "every library write goes through performChanges" invariant is enforced
+    /// at the seam.
+    private let adapter: any PHPhotoLibraryAdapter
+
+    init(adapter: any PHPhotoLibraryAdapter = LivePHPhotoLibraryAdapter()) {
+        self.adapter = adapter
+    }
+
     // MARK: - Read
 
     func loadAlbums() {
@@ -64,14 +77,15 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         // `loadAlbums()` will see a transient empty list — but the only such
         // call site (AlbumsListView.task) already has the `didLoadOnce` flag
         // from PR #41 to handle the empty-vs-loading distinction.
+        let adapter = self.adapter
         Task {
             let collected = await Task.detached(priority: .userInitiated) { () -> [Album] in
                 var result: [Album] = []
-                let fetchResult = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+                let fetchResult = adapter.fetchAssetCollections(with: .album, subtype: .any, options: nil)
                 fetchResult.enumerateObjects { collection, _, _ in
                     let estimated = collection.estimatedAssetCount
                     let count = estimated == NSNotFound
-                        ? PHAsset.fetchAssets(in: collection, options: nil).count
+                        ? adapter.fetchAssets(in: collection, options: nil).count
                         : estimated
                     result.append(Album(
                         id: collection.localIdentifier,
@@ -98,12 +112,12 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         let state = AlbumManager.signposter.beginInterval("memberAssetIDs", id: signpostID)
         defer { AlbumManager.signposter.endInterval("memberAssetIDs", state) }
 
-        let result = PHAssetCollection.fetchAssetCollections(
+        let result = adapter.fetchAssetCollections(
             withLocalIdentifiers: [albumLocalIdentifier], options: nil
         )
         guard let collection = result.firstObject else { return [] }
         var ids: [String] = []
-        let assets = PHAsset.fetchAssets(in: collection, options: nil)
+        let assets = adapter.fetchAssets(in: collection, options: nil)
         assets.enumerateObjects { asset, _, _ in
             ids.append(asset.localIdentifier)
         }
@@ -158,7 +172,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
             if isAsset(asset, memberOf: collection) {
                 return .alreadyMember(albumID: albumID)
             }
-            try await PHPhotoLibrary.shared().performChanges {
+            try await adapter.performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
             }
@@ -178,7 +192,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     /// Returns `false` (and sets `lastError`) if the album no longer exists or
     /// the Photos change request fails.
     func assign(_ asset: PHAsset, toAlbumWithID albumLocalIdentifier: String) async -> Bool {
-        let result = PHAssetCollection.fetchAssetCollections(
+        let result = adapter.fetchAssetCollections(
             withLocalIdentifiers: [albumLocalIdentifier], options: nil
         )
         guard let collection = result.firstObject else {
@@ -190,7 +204,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
             return true
         }
         do {
-            try await PHPhotoLibrary.shared().performChanges {
+            try await adapter.performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.addAssets([asset] as NSArray)
             }
@@ -238,7 +252,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localIdentifier = %@", asset.localIdentifier)
         options.fetchLimit = 1
-        return PHAsset.fetchAssets(in: collection, options: options).count > 0
+        return adapter.fetchAssets(in: collection, options: options).count > 0
     }
 
     /// Removes an asset from a named album. Does not delete the album itself.
@@ -252,7 +266,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     func remove(_ asset: PHAsset, fromAlbumNamed name: String) async -> Bool {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localizedTitle = %@", name)
-        let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        let existing = adapter.fetchAssetCollections(with: .album, subtype: .any, options: options)
         guard let collection = existing.firstObject else {
             lastError = "Album \"\(name)\" not found."
             return false
@@ -266,7 +280,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     /// `localIdentifier` is available: Photos.app permits duplicate-named
     /// albums and a title-based lookup may target the wrong collection.
     func remove(_ asset: PHAsset, fromAlbumWithID albumLocalIdentifier: String) async -> Bool {
-        let result = PHAssetCollection.fetchAssetCollections(
+        let result = adapter.fetchAssetCollections(
             withLocalIdentifiers: [albumLocalIdentifier], options: nil
         )
         guard let collection = result.firstObject else {
@@ -278,7 +292,7 @@ final class AlbumManager: AlbumOperations, AssignResolving {
 
     private func performRemove(_ asset: PHAsset, from collection: PHAssetCollection) async -> Bool {
         do {
-            try await PHPhotoLibrary.shared().performChanges {
+            try await adapter.performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
                 request.removeAssets([asset] as NSArray)
             }
@@ -325,21 +339,21 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         // Existing album with this exact title?
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localizedTitle = %@", name)
-        let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        let existing = adapter.fetchAssetCollections(with: .album, subtype: .any, options: options)
         if let found = existing.firstObject {
             return found
         }
 
         // Otherwise create it.
         var placeholder: PHObjectPlaceholder?
-        try await PHPhotoLibrary.shared().performChanges {
+        try await adapter.performChanges {
             let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
             placeholder = request.placeholderForCreatedAssetCollection
         }
         guard let identifier = placeholder?.localIdentifier else {
             throw AlbumError.creationFailed
         }
-        let created = PHAssetCollection.fetchAssetCollections(
+        let created = adapter.fetchAssetCollections(
             withLocalIdentifiers: [identifier], options: nil
         )
         guard let collection = created.firstObject else {

@@ -1,22 +1,27 @@
-# Manual fallback for the "CI - Pull Requests" Xcode Cloud workflow when
-# Xcode Cloud's monthly compute quota (25h on the free Apple Developer
-# tier) is exhausted. Trigger from the Actions tab or via:
+# Smart hybrid fallback for Xcode Cloud's "CI - Pull Requests" workflow.
 #
-#   gh workflow run pr-fallback-ci.yml --ref <branch>
+# Why this exists: Apple's Xcode Cloud free tier has a 25h/month compute
+# quota. When exhausted, every PR build silently CANCELs (cancelReason=null,
+# startedDate=null). The repo is private + free GitHub plan = no branch
+# protection, so PRs become unverified.
 #
-# Why manual: GitHub Actions counts macOS minutes at 10x toward the free
-# 2000-minute monthly budget on private repos. A single AllTests run is
-# ~20 min wall-clock = 200 effective minutes — keeping this opt-in
-# prevents silently burning the whole month.
+# How the guard works:
+#   1. On PR / push to main, the `quota-check` job hits ASC API and looks at
+#      the 5 most recent runs of Xcode Cloud workflow 2a53972c (the PR
+#      workflow). If 3+ of them are CANCELED-without-reason or FAILED before
+#      start, Xcode Cloud is treated as quota-out.
+#   2. `test` job runs ONLY when quota-check reports quota-out. Saves
+#      ~200 effective GHA macOS minutes per PR when Xcode Cloud is healthy.
 #
-# What runs: xcodegen + xcodebuild test against the UnitTests plan on an
-# iOS Simulator. This mirrors what Xcode Cloud's PR workflow does so the
-# signal is comparable. UI tests are excluded because GitHub Actions
-# macOS runners have documented UI-test flakiness even worse than the
-# local iOS 26 sim.
-name: PR Fallback CI (manual)
+# Manual override: `gh workflow run pr-fallback-ci.yml --ref <branch>` still
+# forces a run regardless of guard state.
+name: PR CI (smart hybrid)
 
 on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       ref:
@@ -27,9 +32,130 @@ on:
 permissions:
   contents: read
 
+# Cancel any older in-flight run for the same ref when a new push arrives —
+# matches Xcode Cloud's `autoCancel: true`. Without this, every typo-fix
+# commit doubles up on macOS-runner minutes.
+concurrency:
+  group: pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  quota-check:
+    name: Detect Xcode Cloud quota state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      quota_out: ${{ steps.detect.outputs.quota_out }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - name: Resolve quota state from ASC API
+        id: detect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # Always run on manual dispatch; the guard only applies to auto triggers.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — bypassing guard"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=manual-dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ] || [ -z "${ASC_PRIVATE_KEY:-}" ]; then
+            echo "ASC secrets missing — assuming Xcode Cloud is quota-out to be safe"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=secrets-missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Mint ASC JWT inline (pure Python, no PyJWT install required).
+          # Uses ES256 signing over /tmp/asc.p8.
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          python3 - <<'PY' > /tmp/jwt.txt
+          import os, json, time, base64, hashlib, hmac
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+          def b64u(b):
+              return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+
+          key_id = os.environ['ASC_KEY_ID']
+          iss = os.environ['ASC_ISSUER_ID']
+          with open('/tmp/asc.p8','rb') as f:
+              key = serialization.load_pem_private_key(f.read(), password=None)
+
+          header = {"alg":"ES256","kid":key_id,"typ":"JWT"}
+          payload = {"iss":iss,"exp":int(time.time())+600,"aud":"appstoreconnect-v1"}
+          signing_input = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+
+          der = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          sig = r.to_bytes(32,'big') + s.to_bytes(32,'big')
+          print(signing_input.decode() + '.' + b64u(sig))
+          PY
+          JWT=$(cat /tmp/jwt.txt)
+          rm /tmp/asc.p8 /tmp/jwt.txt
+
+          # PR workflow id is constant for this app.
+          PR_WORKFLOW="2a53972c-ff8a-43ff-80a3-20de7bd7cdef"
+          # `sort=-number` returns most-recent first; without it the API
+          # hands back the oldest 10 first — which makes the heuristic
+          # blind to today's quota-out runs. Apple's API also throws
+          # transient 500s — retry up to 3x with 5s backoff.
+          for attempt in 1 2 3; do
+            HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$PR_WORKFLOW/buildRuns" \
+              -H "Authorization: Bearer $JWT" \
+              --data-urlencode "limit=10" \
+              --data-urlencode "sort=-number")
+            if [ "$HTTP" = "200" ]; then
+              echo "ASC API: HTTP 200 on attempt $attempt"
+              break
+            fi
+            echo "ASC API: HTTP $HTTP on attempt $attempt — retrying"
+            sleep 5
+          done
+          if [ "$HTTP" != "200" ]; then
+            echo "ASC API never returned 200 — assume quota-out to be safe"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=asc-api-unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BAD=$(python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/resp.json'))
+          runs = []
+          for r in d.get('data', []):
+              a = r['attributes']
+              runs.append((a.get('createdDate',''), a.get('completionStatus'), a.get('cancelReason'), a.get('startedDate')))
+          runs.sort(reverse=True)
+          bad = 0
+          for _, status, reason, started in runs[:5]:
+              if status == 'CANCELED' and reason is None and started is None:
+                  bad += 1
+          print(bad)
+          PY
+          )
+          echo "Recent quota-out signatures: $BAD of last 5 runs"
+          if [ "$BAD" -ge 3 ]; then
+            echo "Xcode Cloud appears quota-out — running fallback tests"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-quota-out" >> "$GITHUB_OUTPUT"
+          else
+            echo "Xcode Cloud appears healthy — skipping fallback tests"
+            echo "quota_out=false" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-healthy" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: xcodebuild test (UnitTests plan, iOS Simulator)
+    needs: quota-check
+    if: needs.quota-check.outputs.quota_out == 'true'
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -38,6 +164,10 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+
+      - name: Show why this job is running
+        run: |
+          echo "Reason: ${{ needs.quota-check.outputs.reason }}"
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app
@@ -56,8 +186,6 @@ jobs:
       - name: Pick a stable iOS simulator
         id: sim
         run: |
-          # Prefer the newest iOS runtime available on the runner. Fall back
-          # to whatever the runner ships if iOS 18 isn't installed.
           DESTINATION="platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
           echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
           xcrun simctl list devices available | head -40

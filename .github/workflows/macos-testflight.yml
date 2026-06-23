@@ -214,22 +214,32 @@ jobs:
           mkdir -p "$PROFILES_DIR"
           PROFILE_PATH="$PROFILES_DIR/pixelcurator-macos.provisionprofile"
           printf '%s' "$PROFILE_B64" | base64 -d > "$PROFILE_PATH"
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin \
-            <<< "$(security cms -D -i "$PROFILE_PATH")")
+          PROFILE_PLIST=$(security cms -D -i "$PROFILE_PATH")
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< "$PROFILE_PLIST")
+          # Read the team ID directly from the profile so we never override
+          # to a team the cert/profile aren't on. This is the alphanumeric
+          # ID (e.g. M5WT732AY5), NOT the project.yml DEVELOPMENT_TEAM value.
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" /dev/stdin <<< "$PROFILE_PLIST")
           echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
-          echo "Installed profile UUID: $PROFILE_UUID"
+          echo "PROFILE_TEAM=$PROFILE_TEAM" >> "$GITHUB_ENV"
+          echo "Installed profile UUID: $PROFILE_UUID, team: $PROFILE_TEAM"
 
       - name: Archive macOS app
         run: |
           set -o pipefail
+          # DEVELOPMENT_TEAM comes from the provisioning profile rather than
+          # the workflow env, so the cert/profile/team triple is always
+          # internally consistent. CODE_SIGN_IDENTITY uses the full common
+          # name including the team suffix so Xcode finds it deterministically
+          # even when multiple distribution certs are present in the keychain.
           xcodebuild archive \
             -project PixelCurator.xcodeproj \
             -scheme "$SCHEME" \
             -destination "generic/platform=macOS" \
             -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution: Yves Vogl" \
+            DEVELOPMENT_TEAM="$PROFILE_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID"
 
       - name: Write export options plist
@@ -244,7 +254,7 @@ jobs:
             <key>destination</key>
             <string>export</string>
             <key>teamID</key>
-            <string>$TEAM_ID</string>
+            <string>$PROFILE_TEAM</string>
             <key>signingStyle</key>
             <string>manual</string>
             <key>provisioningProfiles</key>

@@ -227,7 +227,6 @@ jobs:
             -scheme "$SCHEME" \
             -destination "generic/platform=macOS" \
             -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
-            -allowProvisioningUpdates NO \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
@@ -264,8 +263,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates NO
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
           ls -la "$RUNNER_TEMP/export/"
 
       - name: Upload to TestFlight via altool

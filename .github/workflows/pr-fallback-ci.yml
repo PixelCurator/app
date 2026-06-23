@@ -32,6 +32,13 @@ on:
 permissions:
   contents: read
 
+# Cancel any older in-flight run for the same ref when a new push arrives —
+# matches Xcode Cloud's `autoCancel: true`. Without this, every typo-fix
+# commit doubles up on macOS-runner minutes.
+concurrency:
+  group: pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quota-check:
     name: Detect Xcode Cloud quota state

@@ -34,6 +34,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: macos-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   TEAM_ID: 6T5T32GRR3
   BUNDLE_ID: yves.vogl.pixelcurator

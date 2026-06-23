@@ -272,6 +272,13 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         // #Predicate). The assign-path semantics under test do not depend on
         // suggestion recomputation — they assert state on queue, currentIndex,
         // decisionLog, and lastAssignError.
+        //
+        // Re-triaged 2026-06-23 on Xcode 26.5 / iOS 26.5 sim: removing this
+        // hook reliably SIGTRAPs every test whose code path eventually calls
+        // `advance()` → `recomputeSuggestions()` (testAcceptSuccess,
+        // testAssignToSuccess, testBatchAssign_*, testAcceptOnAlreadyMember).
+        // The trap is unchanged from the original PR #33 surface. Re-check
+        // on the next Xcode / iOS update.
         coordinator._suppressSuggestionsForTesting = true
         if !seedAssets.isEmpty {
             coordinator._seedQueueForTesting(seedAssets, currentIndex: seedIndex)

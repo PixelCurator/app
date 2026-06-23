@@ -139,7 +139,8 @@ jobs:
           persist-credentials: false
 
       - name: Show why this job is running
-        run: echo "Reason: ${{ needs.quota-check.outputs.reason }}"
+        run: |
+          echo "Reason: ${{ needs.quota-check.outputs.reason }}"
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app

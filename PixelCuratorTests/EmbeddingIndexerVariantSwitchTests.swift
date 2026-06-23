@@ -126,6 +126,7 @@ final class EmbeddingIndexerVariantSwitchTests: XCTestCase {
     /// completed. Otherwise the trailing `context.save()` from the cancelled
     /// run can race a freshly-built replacement indexer over the same context.
     func testCancelAndWaitReturnsOnlyAfterInFlightEmbedCompletes() async throws {
+        try Self.skipIfBlockedByN7()
         let context = try makeContext()
         let embedder = SlowFakeEmbedder(sleepMilliseconds: 50)
         let indexer = makeIndexer(context: context, embedder: embedder)
@@ -186,6 +187,7 @@ final class EmbeddingIndexerVariantSwitchTests: XCTestCase {
     /// covers the in-instance equivalent because the same `cancelAndWait()`
     /// guarantee underpins both.
     func testSecondIndexRunAfterCancelStartsWithFreshCounters() async throws {
+        try Self.skipIfBlockedByN7()
         let context = try makeContext()
         let embedder = SlowFakeEmbedder(sleepMilliseconds: 50)
         let indexer = makeIndexer(context: context, embedder: embedder)
@@ -224,6 +226,21 @@ final class EmbeddingIndexerVariantSwitchTests: XCTestCase {
             "Second run should have embedded every asset in its (smaller) batch"
         )
         XCTAssertFalse(indexer.isIndexing, "Second run must report idle on completion")
+    }
+
+    // MARK: - N-7 gate
+
+    /// SwiftData `ModelContext.save()` against an in-memory store SIGTRAPs on
+    /// iOS 26 simulators (backlog N-7, Apple FB pending). The cancel-path
+    /// these tests exercise calls `context.save()` on every embed, so they
+    /// inherit the trap on the affected runtime. Skip until Apple fixes the
+    /// underlying SwiftData bug.
+    private static func skipIfBlockedByN7() throws {
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
+            throw XCTSkip("Skipped on iOS 26+ simulator: SwiftData in-memory ModelContext SIGTRAP (N-7).")
+        }
+        #endif
     }
 
     // MARK: - Polling helper

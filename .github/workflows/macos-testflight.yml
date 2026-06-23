@@ -10,20 +10,12 @@
 #   4. Uploads to TestFlight via xcrun altool with the ASC API key
 #
 # Required secrets (in addition to ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY):
-#   APPLE_DISTRIBUTION_CERT_BASE64      base64 of the .p12 export of "Apple Distribution"
-#   APPLE_DISTRIBUTION_CERT_PASSWORD    password for that .p12
+#   APPLE_DISTRIBUTION_CERT_BASE64      .p12 of "Apple Distribution" — signs the .app
+#   APPLE_INSTALLER_CERT_BASE64         .p12 of "Mac Installer Distribution" — signs the .pkg
+#   APPLE_DISTRIBUTION_CERT_PASSWORD    password — same for both .p12s
 #   APPLE_MACOS_PROVISIONING_PROFILE_BASE64
 #                                       base64 of the macOS App Store .provisionprofile
 #   APPLE_KEYCHAIN_PASSWORD             any string — used to lock the temp keychain
-#
-# Until those 4 secrets are configured, this workflow exits early with a
-# clear log line. Set them via:
-#
-#   base64 -i Distribution.p12       | gh secret set APPLE_DISTRIBUTION_CERT_BASE64
-#   echo "<p12-password>"            | gh secret set APPLE_DISTRIBUTION_CERT_PASSWORD
-#   base64 -i PixelCurator.provisionprofile \
-#                                    | gh secret set APPLE_MACOS_PROVISIONING_PROFILE_BASE64
-#   openssl rand -base64 32          | gh secret set APPLE_KEYCHAIN_PASSWORD
 name: macOS TestFlight (smart hybrid)
 
 on:
@@ -139,21 +131,23 @@ jobs:
       - name: Check secrets
         id: check
         env:
-          CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          DIST_CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          INSTALLER_CERT_B64: ${{ secrets.APPLE_INSTALLER_CERT_BASE64 }}
           CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
           PROFILE_B64: ${{ secrets.APPLE_MACOS_PROVISIONING_PROFILE_BASE64 }}
           KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
         run: |
-          if [ -n "$CERT_B64" ] && [ -n "$CERT_PW" ] && [ -n "$PROFILE_B64" ] && [ -n "$KEY_PW" ]; then
-            echo "All 4 signing secrets present"
+          missing=0
+          for var in DIST_CERT_B64 INSTALLER_CERT_B64 CERT_PW PROFILE_B64 KEY_PW; do
+            if [ -z "${!var}" ]; then
+              echo "Missing: APPLE_* secret backing \$$var"
+              missing=1
+            fi
+          done
+          if [ $missing -eq 0 ]; then
+            echo "All 5 signing secrets present"
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Signing secrets missing — see workflow file for setup instructions"
-            echo "Missing:"
-            [ -z "$CERT_B64" ] && echo "  - APPLE_DISTRIBUTION_CERT_BASE64"
-            [ -z "$CERT_PW" ] && echo "  - APPLE_DISTRIBUTION_CERT_PASSWORD"
-            [ -z "$PROFILE_B64" ] && echo "  - APPLE_MACOS_PROVISIONING_PROFILE_BASE64"
-            [ -z "$KEY_PW" ] && echo "  - APPLE_KEYCHAIN_PASSWORD"
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -183,9 +177,10 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
-      - name: Import signing identity into temp keychain
+      - name: Import signing identities into temp keychain
         env:
-          CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          DIST_CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          INSTALLER_CERT_B64: ${{ secrets.APPLE_INSTALLER_CERT_BASE64 }}
           CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
           KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
         run: |
@@ -196,14 +191,27 @@ jobs:
           security unlock-keychain -p "$KEY_PW" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | xargs)
 
-          CERT_PATH="$RUNNER_TEMP/cert.p12"
-          printf '%s' "$CERT_B64" | base64 -d > "$CERT_PATH"
-          security import "$CERT_PATH" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEY_PW" "$KEYCHAIN_PATH"
-          rm "$CERT_PATH"
+          # Apple Distribution cert — signs the .app inside the archive.
+          DIST_PATH="$RUNNER_TEMP/dist.p12"
+          printf '%s' "$DIST_CERT_B64" | base64 -d > "$DIST_PATH"
+          security import "$DIST_PATH" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm "$DIST_PATH"
 
-          echo "Signing identities available:"
+          # Mac Installer Distribution cert — signs the .pkg installer that
+          # wraps the .app for App Store / TestFlight macOS uploads. Without
+          # this -exportArchive fails with `No signing certificate "Mac
+          # Installer Distribution" found`. Both certs share one password.
+          INSTALLER_PATH="$RUNNER_TEMP/installer.p12"
+          printf '%s' "$INSTALLER_CERT_B64" | base64 -d > "$INSTALLER_PATH"
+          security import "$INSTALLER_PATH" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm "$INSTALLER_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEY_PW" "$KEYCHAIN_PATH"
+
+          echo "Code signing identities:"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "Installer (basic policy) identities:"
+          security find-identity -v -p basic "$KEYCHAIN_PATH"
 
       - name: Install macOS App Store provisioning profile
         env:
@@ -214,26 +222,42 @@ jobs:
           mkdir -p "$PROFILES_DIR"
           PROFILE_PATH="$PROFILES_DIR/pixelcurator-macos.provisionprofile"
           printf '%s' "$PROFILE_B64" | base64 -d > "$PROFILE_PATH"
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin \
-            <<< "$(security cms -D -i "$PROFILE_PATH")")
+          PROFILE_PLIST=$(security cms -D -i "$PROFILE_PATH")
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< "$PROFILE_PLIST")
+          # Read the team ID directly from the profile so we never override
+          # to a team the cert/profile aren't on. This is the alphanumeric
+          # ID (e.g. M5WT732AY5), NOT the project.yml DEVELOPMENT_TEAM value.
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" /dev/stdin <<< "$PROFILE_PLIST")
           echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
-          echo "Installed profile UUID: $PROFILE_UUID"
+          echo "PROFILE_TEAM=$PROFILE_TEAM" >> "$GITHUB_ENV"
+          echo "Installed profile UUID: $PROFILE_UUID, team: $PROFILE_TEAM"
 
       - name: Archive macOS app
         run: |
           set -o pipefail
+          # DEVELOPMENT_TEAM comes from the provisioning profile rather than
+          # the workflow env, so the cert/profile/team triple is always
+          # internally consistent. CODE_SIGN_IDENTITY uses the full common
+          # name including the team suffix so Xcode finds it deterministically
+          # even when multiple distribution certs are present in the keychain.
           xcodebuild archive \
             -project PixelCurator.xcodeproj \
             -scheme "$SCHEME" \
             -destination "generic/platform=macOS" \
             -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution: Yves Vogl" \
+            DEVELOPMENT_TEAM="$PROFILE_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID"
 
       - name: Write export options plist
         run: |
+          # signingCertificate pins the cert xcodebuild uses to sign the .app
+          # itself. Without it the temp keychain holds two candidates (Apple
+          # Distribution + 3rd Party Mac Developer Installer) and xcodebuild
+          # picked the installer cert — which can't sign code, fails with
+          # "this identity cannot be used for signing code". The installer
+          # cert is still picked up implicitly for the .pkg wrapper.
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -244,9 +268,13 @@ jobs:
             <key>destination</key>
             <string>export</string>
             <key>teamID</key>
-            <string>$TEAM_ID</string>
+            <string>$PROFILE_TEAM</string>
             <key>signingStyle</key>
             <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>installerSigningCertificate</key>
+            <string>3rd Party Mac Developer Installer</string>
             <key>provisioningProfiles</key>
             <dict>
               <key>$BUNDLE_ID</key>

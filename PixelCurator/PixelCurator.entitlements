@@ -7,6 +7,12 @@
 	     is gated by the Info.plist usage strings instead). -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- Required for ModelStore.downloadFile() to fetch optional MobileCLIP
+	     variants (S1/S2/B) from huggingface.co under the macOS sandbox. Without
+	     this, URLSession requests fail at the kernel level on Mac App Store
+	     builds, silently breaking variant-switch on Mac. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 	<key>com.apple.security.personal-information.photos-library</key>
 	<true/>
 </dict>

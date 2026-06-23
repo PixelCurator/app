@@ -12,11 +12,23 @@
 	<array/>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
-	<!-- Required-reason APIs: none declared yet. Revisit when adding code that
-	     touches a required-reason category (e.g. UserDefaults -> CA92.1,
-	     file timestamp -> C617.1, disk space -> E174.1, system boot time -> 35F9.1).
-	     SwiftData / PhotoKit / Core ML themselves are not required-reason APIs. -->
+	<!-- Required-reason APIs. SwiftData / PhotoKit / Core ML themselves are not
+	     required-reason APIs. Revisit when adding code that touches additional
+	     categories (file timestamp -> C617.1, disk space -> E174.1,
+	     system boot time -> 35F9.1). -->
 	<key>NSPrivacyAccessedAPITypes</key>
-	<array/>
+	<array>
+		<dict>
+			<!-- UserDefaults via @AppStorage("hideICloudPhotos") in
+			     AppSettingsView + PhotoGridView. CA92.1 = "Access info from
+			     same app, per documentation". -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

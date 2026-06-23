@@ -25,6 +25,9 @@ on:
   push:
     tags:
       - 'v*'
+    # TEMP: branch-trigger for pre-merge verification. Removed before merge.
+    branches:
+      - ci/ios-testflight-fallback
   workflow_dispatch:
 
 permissions:

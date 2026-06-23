@@ -1,0 +1,292 @@
+# macOS TestFlight build + upload via GitHub Actions.
+#
+# Runs on push to main (and via workflow_dispatch), guarded by the same
+# Xcode Cloud quota-out detector as pr-fallback-ci.yml. When Xcode Cloud is
+# healthy, this is a 30-second no-op. When Xcode Cloud is quota-out, it:
+#   1. Imports the Apple Distribution cert + macOS App Store profile from
+#      GitHub Secrets into a temporary keychain
+#   2. Builds & archives the macOS app (xcodebuild archive)
+#   3. Exports the .pkg with method=app-store-connect
+#   4. Uploads to TestFlight via xcrun altool with the ASC API key
+#
+# Required secrets (in addition to ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY):
+#   APPLE_DISTRIBUTION_CERT_BASE64      base64 of the .p12 export of "Apple Distribution"
+#   APPLE_DISTRIBUTION_CERT_PASSWORD    password for that .p12
+#   APPLE_MACOS_PROVISIONING_PROFILE_BASE64
+#                                       base64 of the macOS App Store .provisionprofile
+#   APPLE_KEYCHAIN_PASSWORD             any string — used to lock the temp keychain
+#
+# Until those 4 secrets are configured, this workflow exits early with a
+# clear log line. Set them via:
+#
+#   base64 -i Distribution.p12       | gh secret set APPLE_DISTRIBUTION_CERT_BASE64
+#   echo "<p12-password>"            | gh secret set APPLE_DISTRIBUTION_CERT_PASSWORD
+#   base64 -i PixelCurator.provisionprofile \
+#                                    | gh secret set APPLE_MACOS_PROVISIONING_PROFILE_BASE64
+#   openssl rand -base64 32          | gh secret set APPLE_KEYCHAIN_PASSWORD
+name: macOS TestFlight (smart hybrid)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TEAM_ID: 6T5T32GRR3
+  BUNDLE_ID: yves.vogl.pixelcurator
+  SCHEME: PixelCurator
+
+jobs:
+  quota-check:
+    name: Detect Xcode Cloud quota state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      quota_out: ${{ steps.detect.outputs.quota_out }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - name: Resolve quota state from ASC API
+        id: detect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — bypassing guard"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=manual-dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ] || [ -z "${ASC_PRIVATE_KEY:-}" ]; then
+            echo "ASC secrets missing — skip (Xcode Cloud is the primary path)"
+            echo "quota_out=false" >> "$GITHUB_OUTPUT"
+            echo "reason=secrets-missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          python3 - <<'PY' > /tmp/jwt.txt
+          import os, json, time, base64
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+          b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          key = serialization.load_pem_private_key(open('/tmp/asc.p8','rb').read(), password=None)
+          header = {"alg":"ES256","kid":os.environ['ASC_KEY_ID'],"typ":"JWT"}
+          payload = {"iss":os.environ['ASC_ISSUER_ID'],"exp":int(time.time())+600,"aud":"appstoreconnect-v1"}
+          si = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+          der = key.sign(si, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          print(si.decode() + '.' + b64u(r.to_bytes(32,'big') + s.to_bytes(32,'big')))
+          PY
+          JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
+
+          # macOS workflow is in the same Xcode Cloud workflow as iOS — checks
+          # the "CI - main → TestFlight Internal" workflow's recent runs.
+          MAIN_WORKFLOW="2116F53B-1ACE-49B9-B06F-0F5E394B1354"
+          for attempt in 1 2 3; do
+            HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$MAIN_WORKFLOW/buildRuns" \
+              -H "Authorization: Bearer $JWT" \
+              --data-urlencode "limit=10" \
+              --data-urlencode "sort=-number")
+            [ "$HTTP" = "200" ] && break
+            echo "ASC API: HTTP $HTTP on attempt $attempt — retrying"
+            sleep 5
+          done
+          if [ "$HTTP" != "200" ]; then
+            echo "ASC API never returned 200 — assume quota-out"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=asc-api-unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BAD=$(python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/resp.json'))
+          bad = 0
+          for r in d.get('data', [])[:5]:
+              a = r['attributes']
+              if a.get('completionStatus') == 'CANCELED' and a.get('cancelReason') is None and a.get('startedDate') is None:
+                  bad += 1
+          print(bad)
+          PY
+          )
+          echo "Recent quota-out signatures: $BAD of last 5 main-CI runs"
+          if [ "$BAD" -ge 3 ]; then
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-quota-out" >> "$GITHUB_OUTPUT"
+          else
+            echo "quota_out=false" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-healthy" >> "$GITHUB_OUTPUT"
+          fi
+
+  signing-secrets-check:
+    name: Verify macOS signing secrets are present
+    needs: quota-check
+    if: needs.quota-check.outputs.quota_out == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      has_signing: ${{ steps.check.outputs.has_signing }}
+    steps:
+      - name: Check secrets
+        id: check
+        env:
+          CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+          PROFILE_B64: ${{ secrets.APPLE_MACOS_PROVISIONING_PROFILE_BASE64 }}
+          KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -n "$CERT_B64" ] && [ -n "$CERT_PW" ] && [ -n "$PROFILE_B64" ] && [ -n "$KEY_PW" ]; then
+            echo "All 4 signing secrets present"
+            echo "has_signing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Signing secrets missing — see workflow file for setup instructions"
+            echo "Missing:"
+            [ -z "$CERT_B64" ] && echo "  - APPLE_DISTRIBUTION_CERT_BASE64"
+            [ -z "$CERT_PW" ] && echo "  - APPLE_DISTRIBUTION_CERT_PASSWORD"
+            [ -z "$PROFILE_B64" ] && echo "  - APPLE_MACOS_PROVISIONING_PROFILE_BASE64"
+            [ -z "$KEY_PW" ] && echo "  - APPLE_KEYCHAIN_PASSWORD"
+            echo "has_signing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-upload:
+    name: Build macOS archive & upload to TestFlight
+    needs: [quota-check, signing-secrets-check]
+    if: needs.signing-secrets-check.outputs.has_signing == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Import signing identity into temp keychain
+        env:
+          CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+          KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$KEY_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEY_PW" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | xargs)
+
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          printf '%s' "$CERT_B64" | base64 -d > "$CERT_PATH"
+          security import "$CERT_PATH" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEY_PW" "$KEYCHAIN_PATH"
+          rm "$CERT_PATH"
+
+          echo "Signing identities available:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Install macOS App Store provisioning profile
+        env:
+          PROFILE_B64: ${{ secrets.APPLE_MACOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          PROFILES_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          PROFILE_PATH="$PROFILES_DIR/pixelcurator-macos.provisionprofile"
+          printf '%s' "$PROFILE_B64" | base64 -d > "$PROFILE_PATH"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin \
+            <<< "$(security cms -D -i "$PROFILE_PATH")")
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "Installed profile UUID: $PROFILE_UUID"
+
+      - name: Archive macOS app
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project PixelCurator.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination "generic/platform=macOS" \
+            -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
+            -allowProvisioningUpdates NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID"
+
+      - name: Write export options plist
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>teamID</key>
+            <string>$TEAM_ID</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROFILE_UUID</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+          cat "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Export .pkg
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/PixelCurator-macOS.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates NO
+          ls -la "$RUNNER_TEMP/export/"
+
+      - name: Upload to TestFlight via altool
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # altool reads the .p8 from ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$ASC_PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+          PKG=$(ls "$RUNNER_TEMP/export"/*.pkg | head -1)
+          echo "Uploading: $PKG"
+          xcrun altool --upload-app -t macos -f "$PKG" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Upload xcarchive as artifact
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: PixelCurator-macOS-xcarchive
+          path: ${{ runner.temp }}/PixelCurator-macOS.xcarchive
+          if-no-files-found: warn
+          retention-days: 7

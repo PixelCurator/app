@@ -127,32 +127,29 @@ final class SortingCoordinatorTests: XCTestCase {
     /// and the modelID is observable on the same instance.
     @MainActor
     func testUpdateVariant_swapsModelIDAndPreservesDecisionLog() throws {
-        let container = try ModelContainer(
-            for: PhotoEmbedding.self, AlbumCorrection.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
-        let context = container.mainContext
-
+        // No ModelContainer here: the protocol seam (N-8) lets us drive the
+        // coordinator with a pure-Swift `MockSuggestionSourcing`, so the test
+        // is unaffected by the iOS 26 SwiftData fetch SIGTRAP (backlog N-7).
         let albums = AlbumManager()
         let library = PhotoController()
         let log = DecisionLog(operations: albums)
 
         let coordinator = SortingCoordinator(
-            store: EmbeddingStore(context: context),
+            source: MockSuggestionSourcing(),
             suggester: AlbumSuggester(),
             albumManager: albums,
             photoController: library,
             modelID: "variant-A",
             decisionLog: log,
-            correctionStore: CorrectionStore(context: context)
+            correctionStore: nil
         )
         XCTAssertEqual(coordinator.modelID, "variant-A")
         XCTAssertTrue(coordinator.decisionLog === log)
 
         coordinator.updateVariant(
-            store: EmbeddingStore(context: context),
+            source: MockSuggestionSourcing(),
             suggester: AlbumSuggester(),
-            correctionStore: CorrectionStore(context: context),
+            correctionStore: nil,
             modelID: "variant-B"
         )
 
@@ -235,53 +232,57 @@ final class MockAssignResolver: AssignResolving {
 // because the production constructor took a concrete `AlbumManager`. The
 // `AssignResolving` seam lets us drive every branch (.added / .alreadyMember /
 // .failed) without standing up PhotoKit or a real photo library.
+//
+// N-8 (this PR): replaced the prior `_suppressSuggestionsForTesting` /
+// `_seedQueueForTesting` hooks (and the in-memory `ModelContainer` they were
+// shielding) with a real DI seam — `SuggestionSourcing` is injected as a
+// pure-Swift `MockSuggestionSourcing`, queue building drives through the
+// production `buildQueue()` path with seeded `photoController.assets` and
+// `mockSource.embeddedIDs`. No SwiftData on the test path; iOS 26 SIGTRAP
+// (backlog N-7) is bypassed structurally.
 
 @MainActor
 final class SortingCoordinatorAssignPathTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Stands up a `SortingCoordinator` driven entirely by pure-Swift fakes —
+    /// no `ModelContainer`, no `EmbeddingStore`, no PhotoKit fetch. The queue
+    /// is built through the production `buildQueue()` path by seeding the
+    /// `photoController.assets` list and the `MockSuggestionSourcing.embeddedIDs`
+    /// for the test model variant; `seedIndex` is reached by calling `skip()`
+    /// the appropriate number of times (which exercises the real `advance()`
+    /// path and proves `recomputeSuggestions` is safe against the mock source).
     private func makeCoordinator(
         resolver: MockAssignResolver,
         seedAssets: [PHAsset] = [],
         seedIndex: Int = 0
-    ) throws -> (SortingCoordinator, AlbumManager) {
-        let container = try ModelContainer(
-            for: PhotoEmbedding.self, AlbumCorrection.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
-        let context = container.mainContext
-        let store = EmbeddingStore(context: context)
+    ) -> (SortingCoordinator, AlbumManager) {
+        let modelID = "test-variant"
+        let source = MockSuggestionSourcing()
+        source.embeddedIDs[modelID] = Set(seedAssets.map(\.localIdentifier))
         let albums = AlbumManager()
         let library = PhotoController()
+        library.assets = seedAssets
 
         let coordinator = SortingCoordinator(
-            store: store,
+            source: source,
             suggester: AlbumSuggester(),
             albumManager: albums,
             photoController: library,
-            modelID: "test-variant",
+            modelID: modelID,
             decisionLog: DecisionLog(operations: MockAlbumOperations()),
             correctionStore: nil,
             assignResolver: resolver
         )
-        // Suppress recomputeSuggestions in tests: AlbumSuggester reaches into
-        // EmbeddingStore which signal-traps on FetchDescriptor reads against
-        // an in-memory SwiftData store on iOS 26 (the production-side comment
-        // in EmbeddingStore.embedding documents the same trap class for
-        // #Predicate). The assign-path semantics under test do not depend on
-        // suggestion recomputation — they assert state on queue, currentIndex,
-        // decisionLog, and lastAssignError.
-        //
-        // Re-triaged 2026-06-23 on Xcode 26.5 / iOS 26.5 sim: removing this
-        // hook reliably SIGTRAPs every test whose code path eventually calls
-        // `advance()` → `recomputeSuggestions()` (testAcceptSuccess,
-        // testAssignToSuccess, testBatchAssign_*, testAcceptOnAlreadyMember).
-        // The trap is unchanged from the original PR #33 surface. Re-check
-        // on the next Xcode / iOS update.
-        coordinator._suppressSuggestionsForTesting = true
         if !seedAssets.isEmpty {
-            coordinator._seedQueueForTesting(seedAssets, currentIndex: seedIndex)
+            coordinator.buildQueue()
+            // Advance the cursor through the production path. `skip()` calls
+            // `advance()` → `recomputeSuggestions()` — safe now that the source
+            // is a pure-Swift mock.
+            for _ in 0..<min(seedIndex, seedAssets.count) {
+                coordinator.skip()
+            }
         }
         return (coordinator, albums)
     }
@@ -297,7 +298,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         resolver.results = [.added(albumID: "album-vacation")]
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2]
         )
@@ -326,7 +327,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         resolver.failureError = "Disk full"
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2]
         )
@@ -351,7 +352,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         resolver.results = [.alreadyMember(albumID: "album-vacation")]
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2]
         )
@@ -374,7 +375,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         resolver.results = [.added(albumID: "album-family")]
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2]
         )
@@ -401,7 +402,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         resolver.failureError = "Album creation denied"
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2]
         )
@@ -427,7 +428,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
         let asset3 = StubPHAsset(localIdentifier: "asset-3")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2, asset3]
         )
@@ -468,7 +469,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         let asset1 = StubPHAsset(localIdentifier: "asset-1")
         let asset2 = StubPHAsset(localIdentifier: "asset-2")
         let asset3 = StubPHAsset(localIdentifier: "asset-3")
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset1, asset2, asset3]
         )
@@ -504,7 +505,7 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
         let asset3 = StubPHAsset(localIdentifier: "asset-3")
         let asset4 = StubPHAsset(localIdentifier: "asset-4")
         // Seed a 5-asset queue, cursor on asset-3 (index 3).
-        let (coordinator, _) = try makeCoordinator(
+        let (coordinator, _) = makeCoordinator(
             resolver: resolver,
             seedAssets: [asset0, asset1, asset2, asset3, asset4],
             seedIndex: 3
@@ -528,5 +529,38 @@ final class SortingCoordinatorAssignPathTests: XCTestCase {
                        "The user must stay on the same photo after a batch-assign that removed " +
                        "earlier queue entries")
         XCTAssertTrue(coordinator.isSorting, "Session still active — queue is not empty")
+    }
+}
+
+// MARK: - MockSuggestionSourcing
+//
+// Pure-Swift data source for the assign-path tests. Replaces the
+// `EmbeddingStore`/`ModelContext` pair the prior `_suppressSuggestionsForTesting`
+// hook was working around. By construction this never allocates a SwiftData
+// `@Model` instance, so the iOS 26 simulator SIGTRAP that hits
+// `EmbeddingStore.allEmbeddings(modelID:)` on the in-memory container path
+// (backlog N-7) is structurally bypassed.
+//
+// Tests usually leave both maps empty: the coordinator builds an empty queue
+// when no IDs are embedded, but the assign-path tests seed `embeddedIDs` so
+// `buildQueue()` accepts the seeded `photoController.assets` into the queue.
+
+@MainActor
+final class MockSuggestionSourcing: SuggestionSourcing {
+    /// Per-modelID snapshot list. Defaults to `[:]` → empty array per lookup.
+    var snapshots: [String: [EmbeddingSnapshot]] = [:]
+
+    /// Per-modelID embedded-asset-ID set. Defaults to `[:]` → empty set per
+    /// lookup; the coordinator's `buildQueue()` will then filter every asset
+    /// out (none are "embedded"). Assign-path tests assign the seeded asset IDs
+    /// here so the queue is populated through the production path.
+    var embeddedIDs: [String: Set<String>] = [:]
+
+    func allEmbeddingSnapshots(modelID: String) -> [EmbeddingSnapshot] {
+        snapshots[modelID] ?? []
+    }
+
+    func embeddedAssetIDs(modelID: String) -> Set<String> {
+        embeddedIDs[modelID] ?? []
     }
 }

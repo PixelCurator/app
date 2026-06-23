@@ -237,14 +237,14 @@ struct PixelCuratorApp: App {
             let newCorrectionStore = CorrectionStore(context: context)
             if let coordinator = sortingCoordinator {
                 coordinator.updateVariant(
-                    store: newStore,
+                    source: newStore,
                     suggester: AlbumSuggester(),
                     correctionStore: newCorrectionStore,
                     modelID: variant.modelID
                 )
             } else {
                 self.sortingCoordinator = SortingCoordinator(
-                    store: newStore,
+                    source: newStore,
                     suggester: AlbumSuggester(),
                     albumManager: albums,
                     photoController: library,

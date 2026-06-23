@@ -132,7 +132,10 @@ final class AlbumSuggester {
     /// - Parameters:
     ///   - queryAssetID: `PHAsset.localIdentifier` of the photo to classify.
     ///   - modelID: `CLIPVariant.modelID` that produced the stored embeddings.
-    ///   - store: Live `EmbeddingStore` backed by the app's `ModelContext`.
+    ///   - store: `SuggestionSourcing` data source. Production passes the live
+    ///     `EmbeddingStore` (which conforms via an extension); tests inject a
+    ///     pure-Swift mock that vends `EmbeddingSnapshot`s without touching
+    ///     SwiftData (see backlog N-7 / N-8 for why the seam exists).
     ///   - albumManager: Live `AlbumManager` with already-loaded albums.
     ///   - k: Neighborhood size (default 15).
     /// - Returns: Ranked `AlbumSuggestion` array, empty if the query has no
@@ -140,7 +143,7 @@ final class AlbumSuggester {
     func suggestions(
         for queryAssetID: String,
         modelID: String,
-        store: EmbeddingStore,
+        store: any SuggestionSourcing,
         albumManager: AlbumManager,
         corrections: CorrectionStore? = nil,
         k: Int = 15
@@ -162,11 +165,11 @@ final class AlbumSuggester {
         // The fix is structural: hydrate once, then do O(1) dictionary
         // lookups. The behavioural contract (which embeddings vote, how
         // they're weighted, the corrections fold-in) is unchanged.
-        let rows = store.allEmbeddings(modelID: modelID)
+        let rows = store.allEmbeddingSnapshots(modelID: modelID)
         var embeddingByID: [String: [Float]] = [:]
         embeddingByID.reserveCapacity(rows.count)
         for row in rows {
-            embeddingByID[row.assetID] = row.floats
+            embeddingByID[row.assetID] = row.vector
         }
 
         // Step 2: resolve query embedding from the in-memory dictionary.

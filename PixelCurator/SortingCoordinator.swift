@@ -24,7 +24,12 @@ final class SortingCoordinator {
 
     // MARK: - Dependencies
 
-    private var store: EmbeddingStore
+    /// Data source for embedded photos and suggestion vectors. Production wires
+    /// the live `EmbeddingStore` (which conforms via `SuggestionSourcing.swift`);
+    /// tests inject a pure-Swift mock so the assign-path tests no longer touch
+    /// SwiftData (backlog N-8 closes the prior `_suppressSuggestionsForTesting`
+    /// workaround that masked the iOS 26 SIGTRAP in `EmbeddingStore` fetches).
+    private var source: any SuggestionSourcing
     private var suggester: AlbumSuggester
     let albumManager: AlbumManager
     /// Testable seam for the accept / assignTo / batchAssign paths. Defaults to
@@ -80,7 +85,7 @@ final class SortingCoordinator {
     // MARK: - Init
 
     init(
-        store: EmbeddingStore,
+        source: any SuggestionSourcing,
         suggester: AlbumSuggester,
         albumManager: AlbumManager,
         photoController: PhotoController,
@@ -89,7 +94,7 @@ final class SortingCoordinator {
         correctionStore: CorrectionStore? = nil,
         assignResolver: (any AssignResolving)? = nil
     ) {
-        self.store = store
+        self.source = source
         self.suggester = suggester
         self.albumManager = albumManager
         // Default to the same AlbumManager instance — production wires both
@@ -115,12 +120,12 @@ final class SortingCoordinator {
     /// Called by `PixelCuratorApp.bootIndexer(variant:)` after the prior
     /// indexer has been awaited to completion (see `EmbeddingIndexer.cancelAndWait`).
     func updateVariant(
-        store newStore: EmbeddingStore,
+        source newSource: any SuggestionSourcing,
         suggester newSuggester: AlbumSuggester,
         correctionStore newCorrectionStore: CorrectionStore?,
         modelID newModelID: String
     ) {
-        self.store = newStore
+        self.source = newSource
         self.suggester = newSuggester
         self.correctionStore = newCorrectionStore
         self.modelID = newModelID
@@ -144,7 +149,7 @@ final class SortingCoordinator {
             result.formUnion(albumManager.memberAssetIDs(of: album.id))
         }
 
-        let embeddedIDs = store.embeddedAssetIDs(modelID: modelID)
+        let embeddedIDs = source.embeddedAssetIDs(modelID: modelID)
 
         let filteredIDs = SortingCoordinator.filterInbox(
             allAssetIDs: photoController.assets.map(\.localIdentifier),
@@ -162,33 +167,6 @@ final class SortingCoordinator {
         isSorting = !queue.isEmpty
         recomputeSuggestions()
     }
-
-    // MARK: - Test seam
-
-    /// Replaces the queue and resets the cursor to `index`. Test-only hook used
-    /// by `SortingCoordinatorTests` to drive accept / assignTo / batchAssign
-    /// without standing up PhotoController + EmbeddingStore + a real album set.
-    ///
-    /// Production code MUST NOT call this — `buildQueue()` is the only legitimate
-    /// path. Kept `internal` rather than wrapped in `#if DEBUG` because the
-    /// test target is built in Release for CI runs.
-    internal func _seedQueueForTesting(_ assets: [PHAsset], currentIndex index: Int = 0) {
-        queue = assets
-        currentIndex = max(0, min(index, assets.count))
-        isSorting = !queue.isEmpty
-        sortedCount = 0
-        currentSuggestions = []
-        lastAssignError = nil
-    }
-
-    /// Suppresses `recomputeSuggestions()` invocations. Test-only hook so the
-    /// assign-path tests can drive accept / assignTo / batchAssign without
-    /// triggering an `AlbumSuggester.suggestions(...)` call against a stub
-    /// `PHAsset` — `EmbeddingStore.embedding(...)` traps on iOS 26 simulator
-    /// SwiftData reads against the in-memory store, independent of row count
-    /// (see EmbeddingStore.swift:51's #Predicate-trap note). Production code
-    /// MUST NOT toggle this.
-    internal var _suppressSuggestionsForTesting: Bool = false
 
     // MARK: - Pure inbox filter (testable without PhotoKit)
 
@@ -339,7 +317,7 @@ final class SortingCoordinator {
         let albumMembers = albumManager.albums.reduce(into: Set<String>()) { set, album in
             set.formUnion(albumManager.memberAssetIDs(of: album.id))
         }
-        let embedded = store.embeddedAssetIDs(modelID: modelID)
+        let embedded = source.embeddedAssetIDs(modelID: modelID)
         return SortingCoordinator.filterInbox(
             allAssetIDs: photoController.assets.map(\.localIdentifier),
             embedded: embedded,
@@ -356,7 +334,7 @@ final class SortingCoordinator {
         suggester.suggestions(
             for: asset.localIdentifier,
             modelID: modelID,
-            store: store,
+            store: source,
             albumManager: albumManager,
             corrections: correctionStore
         )
@@ -383,7 +361,6 @@ final class SortingCoordinator {
     }
 
     private func recomputeSuggestions() {
-        if _suppressSuggestionsForTesting { return }
         guard let asset = current else {
             currentSuggestions = []
             return
@@ -391,7 +368,7 @@ final class SortingCoordinator {
         currentSuggestions = suggester.suggestions(
             for: asset.localIdentifier,
             modelID: modelID,
-            store: store,
+            store: source,
             albumManager: albumManager,
             corrections: correctionStore
         )

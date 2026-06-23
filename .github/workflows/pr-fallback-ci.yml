@@ -95,9 +95,29 @@ jobs:
 
           # PR workflow id is constant for this app.
           PR_WORKFLOW="2a53972c-ff8a-43ff-80a3-20de7bd7cdef"
-          curl -sS -G "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$PR_WORKFLOW/buildRuns" \
-            -H "Authorization: Bearer $JWT" \
-            --data-urlencode "limit=10" > /tmp/resp.json
+          # `sort=-number` returns most-recent first; without it the API
+          # hands back the oldest 10 first — which makes the heuristic
+          # blind to today's quota-out runs. Apple's API also throws
+          # transient 500s — retry up to 3x with 5s backoff.
+          for attempt in 1 2 3; do
+            HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$PR_WORKFLOW/buildRuns" \
+              -H "Authorization: Bearer $JWT" \
+              --data-urlencode "limit=10" \
+              --data-urlencode "sort=-number")
+            if [ "$HTTP" = "200" ]; then
+              echo "ASC API: HTTP 200 on attempt $attempt"
+              break
+            fi
+            echo "ASC API: HTTP $HTTP on attempt $attempt — retrying"
+            sleep 5
+          done
+          if [ "$HTTP" != "200" ]; then
+            echo "ASC API never returned 200 — assume quota-out to be safe"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=asc-api-unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           BAD=$(python3 - <<'PY'
           import json

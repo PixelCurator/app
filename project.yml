@@ -50,9 +50,11 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
-        # Photo library usage strings (written into the generated Info.plist)
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "PixelCurator reads your photo library to suggest album assignments on-device."
-        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "PixelCurator adds photos to existing albums or creates new ones when you confirm."
+        # Photo library usage strings are localised via
+        # PixelCurator/InfoPlist.xcstrings (en + de). Do NOT add
+        # INFOPLIST_KEY_NSPhotoLibrary* here — xcodegen would write them as
+        # literal strings into the generated Info.plist and shadow the
+        # xcstrings catalog, leaving German devices on the English fallback.
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         # macOS window behaviour

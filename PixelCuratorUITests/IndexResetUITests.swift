@@ -51,10 +51,10 @@ final class IndexResetUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 10))
         deleteButton.tap()
 
-        // The confirmation dialog contains the destructive "Delete and Rebuild"
+        // The confirmation dialog contains the destructive "Delete and Rebuild Index"
         // button and a "Cancel" button.
         XCTAssertTrue(
-            app.buttons["Delete and Rebuild"].waitForExistence(timeout: 5),
+            app.buttons["Delete and Rebuild Index"].waitForExistence(timeout: 5),
             "Destructive 'Delete and Rebuild' button not found after tapping Delete Index"
         )
         XCTAssertTrue(
@@ -78,7 +78,7 @@ final class IndexResetUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 10))
         deleteButton.tap()
 
-        let confirmButton = app.buttons["Delete and Rebuild"]
+        let confirmButton = app.buttons["Delete and Rebuild Index"]
         XCTAssertTrue(confirmButton.waitForExistence(timeout: 5))
         confirmButton.tap()
 
@@ -106,7 +106,7 @@ final class IndexResetUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 10))
         deleteButton.tap()
 
-        let confirmButton = app.buttons["Delete and Rebuild"]
+        let confirmButton = app.buttons["Delete and Rebuild Index"]
         XCTAssertTrue(confirmButton.waitForExistence(timeout: 5))
         confirmButton.tap()
 
@@ -147,7 +147,7 @@ final class IndexResetUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 10))
         deleteButton.tap()
 
-        let confirmButton = app.buttons["Delete and Rebuild"]
+        let confirmButton = app.buttons["Delete and Rebuild Index"]
         XCTAssertTrue(confirmButton.waitForExistence(timeout: 5))
         confirmButton.tap()
 

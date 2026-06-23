@@ -1,0 +1,42 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSPhotoLibraryAddUsageDescription" : {
+      "comment" : "Shown when the app first asks to add photos to the user's library (e.g. create / append to an album). Photographer voice; du-form in German.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PixelCurator fügt Fotos zu bestehenden Alben hinzu oder erstellt neue, sobald du es bestätigst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PixelCurator adds photos to existing albums or creates new ones when you confirm."
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryUsageDescription" : {
+      "comment" : "Shown when the app first requests read access to the user's photo library. Photographer voice; du-form in German. Emphasises on-device processing.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PixelCurator liest deine Fotomediathek lokal auf dem Gerät, um Albumvorschläge zu machen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PixelCurator reads your photo library to suggest album assignments on-device."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

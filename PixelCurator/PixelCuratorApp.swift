@@ -51,6 +51,14 @@ struct PixelCuratorApp: App {
     /// Guards against concurrent variant-switch calls.
     @State private var isSwitchingVariant = false
 
+    /// B-6. Holds the boot-time error surfaced from `bootIndexer(variant:)`
+    /// so the root view can render an alert with a Retry affordance. The
+    /// previous catch block only `print`-logged, leaving the Sort tab in a
+    /// silent empty state when (e.g.) model compilation failed due to a
+    /// full disk or a corrupt model bundle. Identifiable so SwiftUI can key
+    /// the alert presentation on a stable id.
+    @State private var bootError: BootError?
+
     /// F-02 mitigation. Holds the `pendingCascadeReplay` flag. Modeled as an
     /// `@Observable` class rather than `@State Bool` so the cascade closure
     /// (which is stored on `PhotoController` and outlives any single App body
@@ -91,6 +99,30 @@ struct PixelCuratorApp: App {
                 .environment(\.decisionLog, sharedDecisionLog)
                 .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
+                // B-6. Surface boot failures from `bootIndexer(variant:)`
+                // as an actionable alert. Without this the Sort tab silently
+                // shows the empty state forever (no indexer = no queue).
+                .alert(
+                    Text("Couldn't prepare indexer"),
+                    isPresented: Binding(
+                        get: { bootError != nil },
+                        set: { isPresented in
+                            if !isPresented { bootError = nil }
+                        }
+                    ),
+                    presenting: bootError
+                ) { error in
+                    Button("Try again") {
+                        let variant = error.variant
+                        bootError = nil
+                        Task { await bootIndexer(variant: variant) }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        bootError = nil
+                    }
+                } message: { _ in
+                    Text("Indexing isn't available right now. Try again — if the problem persists, restart PixelCurator.")
+                }
                 // F-02 trailing-edge replay. Whenever the cascade gate state
                 // changes (indexing flipped, variant switch settled), check
                 // whether a cascade was deferred and replay it now that the
@@ -292,7 +324,14 @@ struct PixelCuratorApp: App {
                 )
             }
         } catch {
+            // B-6. Surface the failure to the user via an alert with a
+            // Retry button instead of silently leaving `indexer == nil`.
+            // The most common causes are a corrupt model bundle, a full
+            // disk during model compilation, and a transient PhotoKit
+            // I/O hiccup — all transiently fixable, so a retry is the
+            // right primary action.
             print("PixelCuratorApp: failed to boot indexer for \(variant.displayName): \(error)")
+            self.bootError = BootError(variant: variant, underlying: error)
         }
     }
 
@@ -474,6 +513,22 @@ struct PixelCuratorApp: App {
             print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
         }
     }
+}
+
+// MARK: - BootError
+
+/// B-6. Failure record from `bootIndexer(variant:)` — carried via
+/// `@State private var bootError` so the root view can present a Retry alert.
+/// The `variant` is needed because Retry should re-attempt the *same* variant
+/// the user (or the initial boot) requested, not whatever `activeVariant`
+/// has drifted to in the meantime. Value-typed so it composes with SwiftUI
+/// state diffing. `Identifiable` makes it eligible for the
+/// `alert(_:isPresented:presenting:)` overload that re-renders cleanly on
+/// repeated failures (different `id` → fresh alert).
+struct BootError: Identifiable {
+    let id = UUID()
+    let variant: CLIPVariant
+    let underlying: Error
 }
 
 /// F-02. Identity wrapper for the cascade-replay `.task(id:)` modifier.

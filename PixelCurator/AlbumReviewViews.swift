@@ -84,7 +84,7 @@ struct AlbumDetailView: View {
     @State private var selectedAsset: PHAsset?
     @State private var showingPhotoDialog = false
     @State private var showingMoveDialog = false
-    @State private var toast: String?
+    @State private var toast: ToastMessage?
     /// Same loading-vs-empty distinction as `AlbumsListView` — without it the
     /// "No Photos" copy flashes for one frame on tap before the real grid
     /// resolves.
@@ -207,35 +207,51 @@ struct AlbumDetailView: View {
                 targetAlbumID: target.id,
                 targetAlbumName: target.title
             )
-            await showToast("Moved to \(targetTitle)")
+            await showToast(.localized("Moved to \(targetTitle)"))
         case .assignFailed(let targetTitle, _):
-            await showToast(albumManager.lastError ?? "Move failed — could not add to \(targetTitle).")
+            if let lastError = albumManager.lastError {
+                await showToast(.verbatim(lastError))
+            } else {
+                await showToast(.localized("Move failed — could not add to \(targetTitle)."))
+            }
         case .removeFailedRolledBack(let sourceTitle, _):
-            await showToast("Move failed — asset kept in \(sourceTitle).")
+            await showToast(.localized("Move failed — asset kept in \(sourceTitle)."))
         case .orphanInBothAlbums:
-            await showToast("Move partially failed — please review in Photos.app.")
+            await showToast(.localized("Move partially failed — please review in Photos.app."))
         }
         await loadAssets()
     }
 
     @MainActor
-    private func showToast(_ message: String) async {
+    private func showToast(_ message: ToastMessage) async {
         let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
-        VoiceOver.announce(message)
+        switch message {
+        case .localized(let resource):
+            VoiceOver.announce(resource)
+        case .verbatim(let string):
+            VoiceOver.announce(verbatim: string)
+        }
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }
 
     @ViewBuilder
-    private func toastBanner(_ message: String) -> some View {
-        Text(message)
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .padding(.bottom, 24)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .accessibilityAddTraits(.updatesFrequently)
+    private func toastBanner(_ message: ToastMessage) -> some View {
+        Group {
+            switch message {
+            case .localized(let resource):
+                Text(resource)
+            case .verbatim(let string):
+                Text(verbatim: string)
+            }
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.bottom, 24)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     // MARK: - Helpers

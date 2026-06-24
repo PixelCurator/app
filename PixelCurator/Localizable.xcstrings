@@ -161,6 +161,16 @@
         }
       }
     },
+    "Coming soon": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bald verfügbar"
+          }
+        }
+      }
+    },
     "Create": {
       "localizations": {
         "de": {

@@ -38,6 +38,20 @@ struct AppSettingsView: View {
 
     var body: some View {
         Form {
+            // MARK: Help section
+            //
+            // N-2. Helpful first, destructive last: the link to in-app Help
+            // sits in its own Section above Photos so the eye lands on
+            // "Help & Tips" before reaching "Delete Index".
+            Section {
+                NavigationLink {
+                    HelpView()
+                } label: {
+                    Label("Help & Tips", systemImage: "questionmark.circle")
+                }
+                .accessibilityIdentifier("settings-help-and-tips")
+            }
+
             // MARK: Photos section
             Section {
                 // Inverted polarity reads better: the user is choosing what to

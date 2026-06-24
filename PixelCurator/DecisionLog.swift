@@ -292,6 +292,30 @@ final class DecisionLog {
     private var lastFailedUndoID: UUID?
     private var lastFailedRedoID: UUID?
 
+    // MARK: - F-12 first-decision-in-session hook
+
+    /// F-12. Fires exactly once per DecisionLog instance, the moment the very
+    /// first decision (assignment or move) is recorded. Intended for the
+    /// session-only Undo hint toast in `PhotoGridView` / `SortingInboxView`,
+    /// which want to remind first-time users that Undo doesn't survive an
+    /// app launch (see HelpView, "Is Undo permanent?").
+    ///
+    /// Why a per-instance callback rather than a `NotificationCenter` post?
+    /// The DecisionLog instance lives for the app's lifetime (created once in
+    /// `PixelCuratorApp.bootIndexer` and reused across variant switches). A
+    /// callback fits the existing `AlbumOperations` injection pattern, keeps
+    /// the test surface a single closure invocation, and avoids the
+    /// observer-cleanup obligation that NotificationCenter imposes on every
+    /// view that wants to listen.
+    var onFirstDecisionRecorded: (@MainActor () -> Void)?
+
+    /// Guards `onFirstDecisionRecorded` against firing more than once per
+    /// `DecisionLog` instance. A new app launch creates a fresh DecisionLog
+    /// (per `bootIndexer`) and therefore a fresh gate — but the toast itself
+    /// is additionally gated by an `@AppStorage` flag at the call site so a
+    /// re-launch within the same install does not re-show the hint.
+    private var hasNotifiedFirstDecision = false
+
     // MARK: - Init
 
     init(operations: any AlbumOperations) {
@@ -345,6 +369,16 @@ final class DecisionLog {
         lastRedoError = nil
         lastFailedUndoID = nil
         lastFailedRedoID = nil
+
+        // F-12. Fire the one-shot hook on the first decision recorded by
+        // this DecisionLog instance. Guarded by `hasNotifiedFirstDecision`
+        // so a redo-after-undo (which also lands on the undo stack via
+        // `pushUndo`, not through `record`) and any subsequent record never
+        // re-trigger the hook.
+        if !hasNotifiedFirstDecision {
+            hasNotifiedFirstDecision = true
+            onFirstDecisionRecorded?()
+        }
     }
 
     // MARK: - Undo

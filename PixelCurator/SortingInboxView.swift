@@ -64,6 +64,11 @@ struct SortingInboxView: View {
     @State private var newAlbumName: String = ""
     @State private var pendingNewAlbumAction: ((String) -> Void)?
 
+    /// F-12. Same install-wide gate read by `PhotoGridView`. The two views
+    /// both observe the `pixelCuratorFirstDecisionRecorded` notification;
+    /// the first to handle it flips the storage so the other becomes a no-op.
+    @AppStorage("hasShownUndoSessionHint") private var hasShownUndoSessionHint: Bool = false
+
     // MARK: - Body
 
     var body: some View {
@@ -387,6 +392,15 @@ struct SortingInboxView: View {
         // Load hero image whenever current changes
         .task(id: coordinator.current?.localIdentifier) {
             await loadHeroImage()
+        }
+        // F-12. Session-only Undo hint — same handler as PhotoGridView; the
+        // @AppStorage gate makes whichever view fires first the winner.
+        .onReceive(NotificationCenter.default.publisher(
+            for: .pixelCuratorFirstDecisionRecorded
+        )) { _ in
+            guard !hasShownUndoSessionHint else { return }
+            hasShownUndoSessionHint = true
+            Task { await showToast(.localized("Undo lasts only this session.")) }
         }
     }
 

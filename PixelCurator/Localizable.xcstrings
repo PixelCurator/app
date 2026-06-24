@@ -1240,6 +1240,556 @@
           }
         }
       }
+    },
+    "~50 MB": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~50 MB"
+          }
+        }
+      }
+    },
+    "~75 MB": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~75 MB"
+          }
+        }
+      }
+    },
+    "~175 MB": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~175 MB"
+          }
+        }
+      }
+    },
+    "S0": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S0"
+          }
+        }
+      }
+    },
+    "S1": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1"
+          }
+        }
+      }
+    },
+    "S2": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2"
+          }
+        }
+      }
+    },
+    "B": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "B"
+          }
+        }
+      }
+    },
+    "Fast": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schnell"
+          }
+        }
+      }
+    },
+    "Better quality": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bessere Qualität"
+          }
+        }
+      }
+    },
+    "Higher quality": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Höhere Qualität"
+          }
+        }
+      }
+    },
+    "Best quality": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beste Qualität"
+          }
+        }
+      }
+    },
+    "Bundled, free": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mitgeliefert, kostenlos"
+          }
+        }
+      }
+    },
+    "Pro": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pro"
+          }
+        }
+      }
+    },
+    "Help & Tips": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hilfe & Tipps"
+          }
+        }
+      }
+    },
+    "Undo lasts only this session.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Undo gilt nur in dieser Session."
+          }
+        }
+      }
+    },
+    "What does Index Reset do?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Was macht „Index zurücksetzen“?"
+          }
+        }
+      }
+    },
+    "Index Reset wipes the embeddings and corrections for the variant you're using right now.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "„Index zurücksetzen“ löscht die Embeddings und Korrekturen für die Variante, die du gerade benutzt."
+          }
+        }
+      }
+    },
+    "Embeddings for other variants are preserved — if you've ever switched to a Pro variant and back, that earlier index stays put.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Embeddings für andere Varianten bleiben erhalten – wenn du jemals zu einer Pro-Variante und wieder zurück gewechselt hast, bleibt der frühere Index bestehen."
+          }
+        }
+      }
+    },
+    "After the reset, indexing runs from scratch.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nach dem Zurücksetzen läuft die Indizierung von vorn."
+          }
+        }
+      }
+    },
+    "Your Photos library and album assignments are never touched.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Fotos-Mediathek und deine Album-Zuordnungen werden dabei nicht angerührt."
+          }
+        }
+      }
+    },
+    "Use it if suggestions feel wrong.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutze es, wenn sich die Vorschläge falsch anfühlen."
+          }
+        }
+      }
+    },
+    "Why is the app locked while indexing?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warum ist die App während der Indizierung gesperrt?"
+          }
+        }
+      }
+    },
+    "The rebuild has to finish before suggestions can be accurate.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Rebuild muss durchlaufen, bevor Vorschläge zuverlässig sein können."
+          }
+        }
+      }
+    },
+    "Indexing pauses if you switch to another app — iOS limits how much work can run in the background, so we don't promise a fixed time.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Indizierung pausiert, wenn du in eine andere App wechselst – iOS begrenzt, wie viel im Hintergrund laufen darf, daher versprechen wir keine feste Zeit."
+          }
+        }
+      }
+    },
+    "On a fresh library or after Index Reset, this can take several minutes.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei einer frischen Mediathek oder nach „Index zurücksetzen“ kann das mehrere Minuten dauern."
+          }
+        }
+      }
+    },
+    "You can leave the device on the lock screen if you don't want to watch the progress bar.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du kannst das Gerät auch im Sperrbildschirm liegen lassen, wenn du den Fortschrittsbalken nicht anschauen möchtest."
+          }
+        }
+      }
+    },
+    "What's a CLIP variant?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Was ist eine CLIP-Variante?"
+          }
+        }
+      }
+    },
+    "CLIP variants are the on-device vision models that read your photos and decide which albums they belong in.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLIP-Varianten sind die On-Device-Vision-Modelle, die deine Fotos lesen und entscheiden, in welche Alben sie gehören."
+          }
+        }
+      }
+    },
+    "Tradeoff: a bigger model gives more accurate suggestions but takes longer to index.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abwägung: Ein größeres Modell liefert genauere Vorschläge, indiziert aber langsamer."
+          }
+        }
+      }
+    },
+    "You can switch any time — every variant keeps its own index, so switching back later doesn't waste work.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du kannst jederzeit wechseln – jede Variante hält ihren eigenen Index, ein späterer Rückwechsel verschwendet also keine Arbeit."
+          }
+        }
+      }
+    },
+    "Where do quality models come from?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Woher kommen die Qualitätsmodelle?"
+          }
+        }
+      }
+    },
+    "S0 ships inside the app.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S0 ist in der App enthalten."
+          }
+        }
+      }
+    },
+    "Pro variants download from HuggingFace (apple/coreml-mobileclip).": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pro-Varianten lädt PixelCurator von HuggingFace (apple/coreml-mobileclip)."
+          }
+        }
+      }
+    },
+    "Downloads are content-addressable and verified by SHA-256 checksum — a corrupted download won't be installed.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloads sind inhaltsadressiert und werden per SHA-256-Prüfsumme verifiziert – ein beschädigter Download wird nicht installiert."
+          }
+        }
+      }
+    },
+    "Cached models live in Application Support. Deleting them from Settings is safe; the next switch re-downloads.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gecachte Modelle liegen in Application Support. Sie über die Einstellungen zu löschen ist sicher; der nächste Wechsel lädt sie erneut."
+          }
+        }
+      }
+    },
+    "Are my photos private?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sind meine Fotos privat?"
+          }
+        }
+      }
+    },
+    "Your photos never leave the device for inference or any other reason.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Fotos verlassen das Gerät weder für die Analyse noch aus irgendeinem anderen Grund."
+          }
+        }
+      }
+    },
+    "Suggestions, similarity ranking and album assignments all run on-device.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vorschläge, Ähnlichkeits-Ranking und Album-Zuordnungen laufen alle auf dem Gerät."
+          }
+        }
+      }
+    },
+    "No analytics, no tracking, no third-party SDKs.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein Tracking, keine Analytics, keine Drittanbieter-SDKs."
+          }
+        }
+      }
+    },
+    "When you download a Pro model, HuggingFace logs your IP address (same as any web request) — that's the only network traffic this app starts on its own.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn du ein Pro-Modell herunterlädst, protokolliert HuggingFace deine IP-Adresse (wie bei jeder Web-Anfrage) – das ist der einzige Netzwerkverkehr, den die App von sich aus startet."
+          }
+        }
+      }
+    },
+    "Album assignments are written to Photos.app via PhotoKit, the same way you'd add a photo to an album manually.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Album-Zuordnungen werden über PhotoKit in Fotos geschrieben – genauso, wie du ein Foto auch manuell zu einem Album hinzufügen würdest."
+          }
+        }
+      }
+    },
+    "Is Undo permanent?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bleibt „Rückgängig“ dauerhaft?"
+          }
+        }
+      }
+    },
+    "Undo history is session-only — closing the app clears it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Undo-Historie gilt nur in dieser Session – beim Schließen der App wird sie geleert."
+          }
+        }
+      }
+    },
+    "Once you close the app, album assignments are permanent. You can still remove photos from an album in Photos.app.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sobald du die App schließt, sind Album-Zuordnungen dauerhaft. Fotos lassen sich aber jederzeit in Fotos wieder aus einem Album entfernen."
+          }
+        }
+      }
+    },
+    "Photos.app itself doesn't undo album moves across launches either, so this matches the system behaviour.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auch Fotos selbst nimmt Album-Verschiebungen nicht über App-Neustarts hinweg zurück – das Verhalten entspricht also dem System."
+          }
+        }
+      }
+    },
+    "Why aren't my iCloud photos in suggestions?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warum sind meine iCloud-Fotos nicht in den Vorschlägen?"
+          }
+        }
+      }
+    },
+    "iCloud-only photos can't be analyzed without downloading them first.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reine iCloud-Fotos lassen sich nicht analysieren, ohne sie vorher zu laden."
+          }
+        }
+      }
+    },
+    "PixelCurator skips them to avoid slow background downloads on cellular or limited Wi-Fi.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PixelCurator überspringt sie, um langsame Hintergrund-Downloads über Mobilfunk oder schwaches WLAN zu vermeiden."
+          }
+        }
+      }
+    },
+    "To include one: open Photos.app, view the photo so iCloud downloads it, then come back here.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "So holst du eins dazu: öffne Fotos, schau dir das Foto an, damit iCloud es lädt, und komm dann hierher zurück."
+          }
+        }
+      }
+    },
+    "The Settings toggle \"Show iCloud photos\" controls whether they appear in lists at all.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Einstellungs-Schalter „iCloud-Fotos anzeigen“ steuert, ob sie in den Listen überhaupt erscheinen."
+          }
+        }
+      }
+    },
+    "How do I cancel indexing?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wie breche ich die Indizierung ab?"
+          }
+        }
+      }
+    },
+    "There's currently no Cancel button for an in-flight indexing run.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktuell gibt es keinen Abbrechen-Button für einen laufenden Indizierungs-Vorgang."
+          }
+        }
+      }
+    },
+    "Switching CLIP variants cancels the run and rebuilds for the new variant.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Wechsel der CLIP-Variante bricht den Lauf ab und startet einen Rebuild für die neue Variante."
+          }
+        }
+      }
+    },
+    "Index Reset also cancels and restarts.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "„Index zurücksetzen“ bricht ebenfalls ab und startet neu."
+          }
+        }
+      }
+    },
+    "A proper Cancel button is on the roadmap for a future release.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein richtiger Abbrechen-Button steht auf der Roadmap für ein zukünftiges Release."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

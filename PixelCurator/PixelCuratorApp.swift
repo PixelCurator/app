@@ -187,16 +187,22 @@ struct PixelCuratorApp: App {
         // automatically. We re-inject the subset that `AppSettingsView` needs so
         // the Index Reset button is functional from the macOS Settings pane.
         Settings {
-            AppSettingsView()
-                .environment(library)
-                .environment(\.embeddingIndexer, indexer)
-                .environment(\.activeVariant, activeVariant)
-                // F-13. Inject the variant-switch flag here too — the macOS
-                // Settings scene does not inherit WindowGroup's environment,
-                // and AppSettingsView's Delete Index button gate relies on
-                // reading this value.
-                .environment(\.isSwitchingVariant, isSwitchingVariant)
-                .modelContainer(modelContainer)
+            // N-2. Wrap in NavigationStack so the new "Help & Tips" row in
+            // AppSettingsView pushes HelpView correctly on macOS. The iOS
+            // sheet path (in PhotoGridView) already wraps in its own
+            // NavigationStack, so AppSettingsView itself stays unwrapped.
+            NavigationStack {
+                AppSettingsView()
+                    .environment(library)
+                    .environment(\.embeddingIndexer, indexer)
+                    .environment(\.activeVariant, activeVariant)
+                    // F-13. Inject the variant-switch flag here too — the macOS
+                    // Settings scene does not inherit WindowGroup's environment,
+                    // and AppSettingsView's Delete Index button gate relies on
+                    // reading this value.
+                    .environment(\.isSwitchingVariant, isSwitchingVariant)
+                    .modelContainer(modelContainer)
+            }
         }
         #endif
     }
@@ -265,7 +271,23 @@ struct PixelCuratorApp: App {
         // Create the shared DecisionLog once (on first boot). Variant switches
         // don't need a fresh log — the same albums instance backs undo operations.
         if sharedDecisionLog == nil {
-            sharedDecisionLog = DecisionLog(operations: albums)
+            let log = DecisionLog(operations: albums)
+            // F-12. The DecisionLog fires `onFirstDecisionRecorded` exactly
+            // once per app launch, the moment the user records their first
+            // assignment or move. We rebroadcast as a Notification so any
+            // currently-visible view (PhotoGridView, SortingInboxView) can
+            // show the one-shot "Undo lasts only this session" toast through
+            // its existing `showToast` pipeline. The persistent across-launch
+            // gate (`@AppStorage("hasShownUndoSessionHint")`) lives at the
+            // call site so the DecisionLog itself stays free of UserDefaults
+            // coupling.
+            log.onFirstDecisionRecorded = {
+                NotificationCenter.default.post(
+                    name: .pixelCuratorFirstDecisionRecorded,
+                    object: nil
+                )
+            }
+            sharedDecisionLog = log
         }
 
         // Wire the library-change cascade once. The handler captures the
@@ -598,6 +620,19 @@ final class CascadeGate {
         case .limited, .denied, .restricted, .unknown: return false
         }
     }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// F-12. Posted on the main thread the moment the shared `DecisionLog`
+    /// records its first decision in the current app launch. Observers (the
+    /// grid and inbox toast helpers) decide whether to render the
+    /// session-only Undo hint by consulting an `@AppStorage` flag — the
+    /// notification itself fires once per launch unconditionally.
+    static let pixelCuratorFirstDecisionRecorded = Notification.Name(
+        "PixelCurator.firstDecisionRecorded"
+    )
 }
 
 // MARK: - Environment keys

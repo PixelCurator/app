@@ -71,7 +71,15 @@ final class ModelStore {
     // MARK: - Pro variants (download on demand)
 
     /// HuggingFace base URL for the apple/coreml-mobileclip repository.
-    private static let hfBaseURL = "https://huggingface.co/apple/coreml-mobileclip/resolve/main"
+    ///
+    /// Uses the **content-addressable** `resolve/<commit-sha>` form (not `main`)
+    /// so the same URL returns the same bytes forever; combined with the
+    /// per-file SHA-256 in `ModelManifest`, this gives us a verifiable
+    /// supply-chain pin for the model weights (F-05 / R-04). Bumping
+    /// `ModelManifest.commitSHA` requires re-pinning every file hash.
+    private static var hfBaseURL: String {
+        "https://huggingface.co/apple/coreml-mobileclip/resolve/\(ModelManifest.commitSHA)"
+    }
 
     /// Resolves a pro variant by checking cache first, then downloading from HuggingFace.
     ///
@@ -137,7 +145,12 @@ final class ModelStore {
             guard let remoteURL = URL(string: "\(hfBaseURL)/\(suffix)") else {
                 throw ModelStoreError.invalidDownloadURL(suffix)
             }
-            try await downloadFile(from: remoteURL, to: destination)
+            let expectedHash = ModelManifest.expectedSHA256(for: suffix, variant: variant)
+            try await downloadFile(
+                from: remoteURL,
+                to: destination,
+                expectedSHA256: expectedHash
+            )
         }
 
         return packageDir
@@ -145,13 +158,48 @@ final class ModelStore {
 
     /// Downloads a single file from `remoteURL` and writes it to `localURL`,
     /// using `URLSession` with default configuration. Overwrites any existing file.
-    private static func downloadFile(from remoteURL: URL, to localURL: URL) async throws {
+    ///
+    /// When `expectedSHA256` is non-nil **and** `ModelManifest.verifyDownloads`
+    /// is `true`, the bytes are SHA-256 hashed and compared to the pin before
+    /// being moved into place. On mismatch we delete both the temp download
+    /// and any pre-existing destination, then throw
+    /// `ModelStoreError.checksumMismatch` — fail closed (F-05 / R-04).
+    static func downloadFile(
+        from remoteURL: URL,
+        to localURL: URL,
+        expectedSHA256: String?
+    ) async throws {
         let (tmpURL, response) = try await URLSession.shared.download(from: remoteURL)
 
         if let httpResponse = response as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
             try? FileManager.default.removeItem(at: tmpURL)
             throw ModelStoreError.downloadFailed(remoteURL, statusCode: httpResponse.statusCode)
+        }
+
+        // Verify checksum before publishing the file. We read the temp file
+        // (already on disk, written by URLSession) rather than the destination
+        // so a mismatch never leaves a poisoned file in the cache.
+        if ModelManifest.verifyDownloads, let expectedSHA256 {
+            let data: Data
+            do {
+                data = try Data(contentsOf: tmpURL)
+            } catch {
+                try? FileManager.default.removeItem(at: tmpURL)
+                throw ModelStoreError.checksumReadFailed(remoteURL, underlying: error)
+            }
+            let actualHex = ModelManifest.sha256Hex(of: data)
+            guard ModelManifest.verifyChecksum(data: data, expectedHex: expectedSHA256) else {
+                try? FileManager.default.removeItem(at: tmpURL)
+                // Defensive cleanup: if a prior partial download left a file at
+                // `localURL`, drop it so the next attempt re-downloads cleanly.
+                try? FileManager.default.removeItem(at: localURL)
+                throw ModelStoreError.checksumMismatch(
+                    url: remoteURL,
+                    expected: expectedSHA256,
+                    actual: actualHex
+                )
+            }
         }
 
         if FileManager.default.fileExists(atPath: localURL.path) {
@@ -192,6 +240,18 @@ enum ModelStoreError: LocalizedError {
     case compilationFailed(Error)
     case invalidDownloadURL(String)
     case downloadFailed(URL, statusCode: Int)
+    /// The downloaded bytes did not hash to the pinned SHA-256 in
+    /// `ModelManifest`. The downloaded temp file is deleted before the throw —
+    /// the cache stays uncorrupted. Callers should not retry without
+    /// investigating: a mismatch means either the manifest is stale (new
+    /// upstream commit) or the download path is compromised (MITM / poisoned
+    /// mirror). F-05 / R-04.
+    case checksumMismatch(url: URL, expected: String, actual: String)
+    /// The downloaded temp file could not be read back for checksum
+    /// verification. Treated as a hard failure rather than degrading to
+    /// "ship without verification" — if the disk is too sick to read what we
+    /// just wrote, the resulting `.mlpackage` is not trustworthy either.
+    case checksumReadFailed(URL, underlying: Error)
 
     var errorDescription: String? {
         switch self {
@@ -205,6 +265,15 @@ enum ModelStoreError: LocalizedError {
             return "Could not construct download URL for '\(suffix)'."
         case .downloadFailed(let url, let statusCode):
             return "Download failed for \(url.lastPathComponent) (HTTP \(statusCode))."
+        case .checksumMismatch(let url, let expected, let actual):
+            // Defensive phrasing — no exploit walkthrough, no hint about
+            // bypass. Surface enough to debug a legitimate upstream-commit
+            // bump (the hash diff identifies the offending file).
+            return "Downloaded file failed integrity check: \(url.lastPathComponent). " +
+                "Expected SHA-256 \(expected), got \(actual)."
+        case .checksumReadFailed(let url, let underlying):
+            return "Could not verify integrity of downloaded file \(url.lastPathComponent): " +
+                "\(underlying.localizedDescription)"
         }
     }
 }

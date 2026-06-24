@@ -51,6 +51,15 @@ struct PixelCuratorApp: App {
     /// Guards against concurrent variant-switch calls.
     @State private var isSwitchingVariant = false
 
+    /// F-02 mitigation. Holds the `pendingCascadeReplay` flag. Modeled as an
+    /// `@Observable` class rather than `@State Bool` so the cascade closure
+    /// (which is stored on `PhotoController` and outlives any single App body
+    /// evaluation) can read + write the flag through a `weak` capture without
+    /// reaching through a struct-typed `@State` projection. See
+    /// `installLibraryChangeCascade` for why the closure must not strongly
+    /// retain the App struct.
+    @State private var cascadeGate = CascadeGate()
+
     /// The single SwiftData container shared by the SwiftUI scene and every ML
     /// service (indexer, similarity search, sorting). Using one container —
     /// rather than one per service — is essential: multiple independent
@@ -82,6 +91,20 @@ struct PixelCuratorApp: App {
                 .environment(\.decisionLog, sharedDecisionLog)
                 .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
+                // F-02 trailing-edge replay. Whenever the cascade gate state
+                // changes (indexing flipped, variant switch settled), check
+                // whether a cascade was deferred and replay it now that the
+                // shared mainContext has no in-flight writer. The id captures
+                // both gates so either flip triggers the modifier re-run; the
+                // body itself re-checks both gates before running, so a flip
+                // that opens one gate while the other is still closed is a
+                // no-op (the deferred work waits for the second gate too).
+                .task(id: CascadeReplayKey(
+                    isIndexing: indexer?.isIndexing == true,
+                    isSwitchingVariant: isSwitchingVariant
+                )) {
+                    await replayCascadeIfPending()
+                }
                 // App-wide indexing lock: presented whenever the indexer is
                 // actively running. On iOS we use .fullScreenCover so it sits
                 // above sheets and navigation stacks; on macOS .fullScreenCover
@@ -136,6 +159,11 @@ struct PixelCuratorApp: App {
                 .environment(library)
                 .environment(\.embeddingIndexer, indexer)
                 .environment(\.activeVariant, activeVariant)
+                // F-13. Inject the variant-switch flag here too — the macOS
+                // Settings scene does not inherit WindowGroup's environment,
+                // and AppSettingsView's Delete Index button gate relies on
+                // reading this value.
+                .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .modelContainer(modelContainer)
         }
         #endif
@@ -323,43 +351,145 @@ struct PixelCuratorApp: App {
     /// way only and cleared on app teardown.
     @MainActor
     private func installLibraryChangeCascade() {
+        // F-02. The closure is the gated entrypoint; it never touches the
+        // shared `modelContainer.mainContext` directly. If indexing or a
+        // variant switch is in flight, set `cascadeGate.pendingReplay` and
+        // return — the root's `.task(id:)` replay modifier will re-run the
+        // prune once both gates open. Otherwise dispatch to
+        // `runCascadePrune()` immediately. The deferred-replay path is what
+        // keeps the cascade from interleaving `context.save()` with
+        // `EmbeddingIndexer.runIndex`, which writes the same context across
+        // `await embedder.embed(_:)` suspension points.
+        //
+        // Captures: `gate` is weak so the closure (retained by
+        // `PhotoController.onLibraryDidChange`) does not pin the App's
+        // `@State` storage. `runPrune` is a value-typed closure that
+        // captures the run helper indirectly through the same weak gate.
+        let gate = cascadeGate
+        let isIndexingGate: @MainActor () -> Bool = { [weak indexer] in
+            indexer?.isIndexing == true
+        }
+        let isSwitchingGate: @MainActor () -> Bool = { [self] in
+            // `self` is the value-typed App struct; capturing it by value is
+            // safe (no class retain). The `_isSwitchingVariant` projection
+            // reads through SwiftUI's `@State` storage which outlives any
+            // single App body evaluation.
+            self.isSwitchingVariant
+        }
+        let runPrune: @MainActor () async -> Void = { [self] in
+            await self.runCascadePrune()
+        }
+        library.onLibraryDidChange = { @MainActor [weak gate] in
+            // Route through `CascadeGate.deferIfBusy` so unit tests can
+            // exercise the same gate semantics directly (see
+            // CascadeRaceTests).
+            let deferred = gate?.deferIfBusy(
+                isIndexing: isIndexingGate(),
+                isSwitchingVariant: isSwitchingGate()
+            ) ?? false
+            if deferred { return }
+            await runPrune()
+        }
+    }
+
+    /// F-02 trailing-edge replay hook. Wired to `.task(id:)` on the root —
+    /// rerun whenever `isIndexing` or `isSwitchingVariant` changes. The body
+    /// re-checks both gates (the id can fire on a closing edge too) and only
+    /// drains a pending cascade when both gates are open.
+    @MainActor
+    private func replayCascadeIfPending() async {
+        let shouldReplay = cascadeGate.consumePendingReplay(
+            isIndexing: indexer?.isIndexing == true,
+            isSwitchingVariant: isSwitchingVariant
+        )
+        guard shouldReplay else { return }
+        await runCascadePrune()
+    }
+
+    /// Performs the cascade prune across `EmbeddingStore`, `CorrectionStore`,
+    /// and `DecisionLog`, then saves the shared `mainContext`. Pulled out of
+    /// `installLibraryChangeCascade` so the trailing-edge replay path can
+    /// reuse the identical body without duplicating the prune order.
+    @MainActor
+    private func runCascadePrune() async {
         let context = modelContainer.mainContext
         let embeddings = EmbeddingStore(context: context)
         let corrections = CorrectionStore(context: context)
-        // Capture `library` and `albums` weakly: each retains its own
-        // `onLibraryDidChange` closure, so a strong capture would create a
-        // retain cycle. `sharedDecisionLog` is captured weakly for symmetry —
-        // if the log is ever recreated the cascade should pick up the new one
-        // via the next `installLibraryChangeCascade` rather than fire on a
-        // stale instance.
-        library.onLibraryDidChange = { [weak library, weak albums, weak sharedDecisionLog] in
-            guard let library, let albums else { return }
-            // Reload albums first so the prune sees current state. PhotoController
-            // already reloaded `assets` before invoking this callback.
-            albums.loadAlbums()
 
-            let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
-            let livingAlbumIDs = Set(albums.albums.map(\.id))
-            let livingAlbumNames = Set(albums.albums.map(\.title))
+        // Reload albums first so the prune sees current state. PhotoController
+        // already reloaded `assets` before invoking the cascade closure.
+        albums.loadAlbums()
 
-            embeddings.prune(keeping: livingAssetIDs)
-            corrections.prune(
-                keepingAssetIDs: livingAssetIDs,
-                livingAlbumNames: livingAlbumNames
-            )
-            sharedDecisionLog?.prune(
-                keepingAssets: livingAssetIDs,
-                livingAlbumIDs: livingAlbumIDs
-            )
+        let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
+        let livingAlbumIDs = Set(albums.albums.map(\.id))
+        let livingAlbumNames = Set(albums.albums.map(\.title))
 
-            // Persist the prune. Failing to save here means a relaunch could
-            // reload the now-pruned rows from disk.
-            do {
-                try context.save()
-            } catch {
-                print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
-            }
+        embeddings.prune(keeping: livingAssetIDs)
+        corrections.prune(
+            keepingAssetIDs: livingAssetIDs,
+            livingAlbumNames: livingAlbumNames
+        )
+        sharedDecisionLog?.prune(
+            keepingAssets: livingAssetIDs,
+            livingAlbumIDs: livingAlbumIDs
+        )
+
+        // Persist the prune. Failing to save here means a relaunch could
+        // reload the now-pruned rows from disk.
+        do {
+            try context.save()
+        } catch {
+            print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
         }
+    }
+}
+
+/// F-02. Identity wrapper for the cascade-replay `.task(id:)` modifier.
+/// Hashable equality flips whenever either gate (indexing in flight, variant
+/// switch in flight) changes value, which is exactly when the cascade may
+/// have unblocked.
+private struct CascadeReplayKey: Hashable {
+    let isIndexing: Bool
+    let isSwitchingVariant: Bool
+}
+
+/// F-02. Mutable holder for the pending-replay flag. A reference type lets
+/// the cascade closure (stored on `PhotoController.onLibraryDidChange`,
+/// outliving any single App body evaluation) mutate the flag via a weak
+/// capture without retaining the App's value-typed `@State` storage. Marked
+/// `@MainActor` because both the cascade closure and the replay reader run
+/// on the main actor.
+@MainActor
+final class CascadeGate {
+    var pendingReplay: Bool = false
+
+    /// F-02 gate-decision shim. Pure function over `(isIndexing,
+    /// isSwitchingVariant)` so unit tests can exercise the deferral semantics
+    /// without spinning up a full `PixelCuratorApp` (the closure that
+    /// `installLibraryChangeCascade` installs on `PhotoController` is a
+    /// private member of an `@main` App struct and is not directly
+    /// instantiable from tests).
+    ///
+    /// - Returns: `true` if the change should be deferred (and the caller
+    ///   should NOT run the prune); `false` if the cascade is free to run.
+    ///   Mutates `pendingReplay` to `true` when deferring.
+    @discardableResult
+    func deferIfBusy(isIndexing: Bool, isSwitchingVariant: Bool) -> Bool {
+        if isIndexing || isSwitchingVariant {
+            pendingReplay = true
+            return true
+        }
+        return false
+    }
+
+    /// F-02 replay-decision shim. Mirror of `replayCascadeIfPending` semantics
+    /// in pure-function form. Returns `true` when the caller should run the
+    /// prune (and clears `pendingReplay` as a side effect).
+    @discardableResult
+    func consumePendingReplay(isIndexing: Bool, isSwitchingVariant: Bool) -> Bool {
+        guard pendingReplay, !isIndexing, !isSwitchingVariant else { return false }
+        pendingReplay = false
+        return true
     }
 }
 

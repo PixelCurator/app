@@ -22,6 +22,13 @@ struct AppSettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PhotoController.self) private var library
     @Environment(\.activeVariant) private var activeVariant
+    // F-13. Read the in-flight variant-switch flag so the Delete Index
+    // affordance is gated until the switch finishes. Without this gate, the
+    // user could tap Delete Index between selecting a new variant and
+    // `bootIndexer(variant:)` reassigning `activeVariant`; the wipe would
+    // then target the OLD variant's `modelID`, not the one the user
+    // believes they reset.
+    @Environment(\.isSwitchingVariant) private var isSwitchingVariant
 
     // MARK: - Local state
 
@@ -61,6 +68,10 @@ struct AppSettingsView: View {
                     Label("Delete Index", systemImage: "trash")
                 }
                 .accessibilityIdentifier("settings-delete-index")
+                // F-13. Disable while a variant switch is in flight. See the
+                // `isSwitchingVariant` property declaration above for the
+                // race motivation.
+                .disabled(isSwitchingVariant)
                 .confirmationDialog(
                     "Delete and rebuild the index?",
                     isPresented: $showDeleteConfirmation,
@@ -76,9 +87,18 @@ struct AppSettingsView: View {
             } header: {
                 Text("Index")
             } footer: {
-                Text("Reset the index if album suggestions feel wrong. The app stays locked while rebuilding.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                // F-13. Swap the footer to an explanation of the gate while a
+                // variant switch is in flight, so the disabled button doesn't
+                // look like a bug.
+                if isSwitchingVariant {
+                    Text("Wait for the quality switch to finish before resetting the index.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Reset the index if album suggestions feel wrong. The app stays locked while rebuilding.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         #if os(macOS)
@@ -105,6 +125,14 @@ struct AppSettingsView: View {
     @MainActor
     private func resetIndex() async {
         guard let indexer else { return }
+        // F-13 defense in depth. The Delete Index button is already disabled
+        // while `isSwitchingVariant == true`, but the confirmation dialog
+        // could in principle latch a tap that arrived while the gate was
+        // open. Re-check here and bail if a variant switch is now in flight —
+        // wiping with a stale `activeVariant.modelID` would target the wrong
+        // variant's embeddings.
+        guard !isSwitchingVariant else { return }
+        let modelID = activeVariant.modelID
 
         // 1. Stop any in-flight indexing first. Without cancelAndWait the parallel
         //    `runIndex` loop keeps writing rows AFTER deleteAll, producing a
@@ -116,8 +144,8 @@ struct AppSettingsView: View {
         //    Settings copy promises this fixes "suggestions feel wrong" — the
         //    suggestions are shaped by both stores, so wiping only embeddings
         //    leaves the user's complaint un-addressed (backlog F-19).
-        EmbeddingStore(context: modelContext).deleteAll(modelID: activeVariant.modelID)
-        CorrectionStore(context: modelContext).deleteAll(modelID: activeVariant.modelID)
+        EmbeddingStore(context: modelContext).deleteAll(modelID: modelID)
+        CorrectionStore(context: modelContext).deleteAll(modelID: modelID)
         try? modelContext.save()
 
         // 3. Re-index everything. `indexer.index(assets:)` sets `isIndexing = true`

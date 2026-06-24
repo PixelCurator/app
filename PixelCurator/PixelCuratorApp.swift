@@ -410,6 +410,27 @@ struct PixelCuratorApp: App {
     /// and `DecisionLog`, then saves the shared `mainContext`. Pulled out of
     /// `installLibraryChangeCascade` so the trailing-edge replay path can
     /// reuse the identical body without duplicating the prune order.
+    ///
+    /// F-10/F-11. This routine is **destructive** — it deletes rows whose
+    /// `localIdentifier` is not in `library.assets`. Under reduced
+    /// authorization states `library.assets` does NOT represent "every
+    /// photo the user owns":
+    ///
+    ///   - `.limited`: `PHAsset.fetchAssets` returns only the user-picked
+    ///     subset. The other photos still exist; we just can't see them
+    ///     right now. Pruning would wipe embeddings for tens of thousands
+    ///     of perfectly valid assets every time the Limited-Library
+    ///     selection changes.
+    ///   - `.denied` / `.restricted`: `library.assets` is `[]` (the change
+    ///     handler clears it). Pruning would erase the entire derived
+    ///     dataset on a transient permission revoke — exactly the F-11
+    ///     symptom: 10k+ embeddings lost on a single auth flicker.
+    ///   - `.authorized`: `library.assets` is the full library snapshot,
+    ///     so pruning against it is correct.
+    ///
+    /// We therefore skip the prune unless `library.authState == .authorized`.
+    /// A destructive index wipe remains available on demand via
+    /// Settings → Delete Index (see F-19).
     @MainActor
     private func runCascadePrune() async {
         let context = modelContainer.mainContext
@@ -419,6 +440,17 @@ struct PixelCuratorApp: App {
         // Reload albums first so the prune sees current state. PhotoController
         // already reloaded `assets` before invoking the cascade closure.
         albums.loadAlbums()
+
+        // F-10/F-11. Skip the prune unless we're operating against the
+        // full library snapshot. `.limited` and `.denied` / `.restricted`
+        // both produce a partial `library.assets` view; treating every
+        // off-list asset as deleted is what destroyed user embeddings on
+        // transient auth changes. The gate decision is factored into a
+        // pure static so unit tests can exercise the policy without
+        // standing up the full App.
+        guard CascadeGate.shouldRunDestructivePrune(authState: library.authState) else {
+            return
+        }
 
         let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
         let livingAlbumIDs = Set(albums.albums.map(\.id))
@@ -490,6 +522,26 @@ final class CascadeGate {
         guard pendingReplay, !isIndexing, !isSwitchingVariant else { return false }
         pendingReplay = false
         return true
+    }
+
+    /// F-10/F-11. Decision shim for the destructive prune in
+    /// `PixelCuratorApp.runCascadePrune`. Pure function over
+    /// `PhotoController.AuthState` so unit tests can lock the policy
+    /// without standing up the App.
+    ///
+    /// - Returns: `true` only when `library.assets` is known to be the
+    ///   full library snapshot (`.authorized`). All other states return
+    ///   `false`:
+    ///   - `.limited`: `PHAsset.fetchAssets` returns only the user-picked
+    ///     subset. Pruning would wipe embeddings for every off-list asset.
+    ///   - `.denied` / `.restricted`: `library.assets` is empty; pruning
+    ///     would erase the entire derived dataset on a transient revoke.
+    ///   - `.unknown`: pre-determination state — never destructive.
+    static func shouldRunDestructivePrune(authState: PhotoController.AuthState) -> Bool {
+        switch authState {
+        case .authorized: return true
+        case .limited, .denied, .restricted, .unknown: return false
+        }
     }
 }
 

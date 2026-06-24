@@ -143,6 +143,14 @@ final class SortingCoordinator {
 
     /// Builds (or rebuilds) the review queue. Must be called before presenting
     /// `SortingInboxView`. Safe to call again mid-session to refresh.
+    ///
+    /// F-08: the queue source is `photoController.visibleAssets`, NOT
+    /// `photoController.assets`. When the "Hide iCloud photos" toggle is on,
+    /// iCloud-only assets are filtered out of the visible set — they have no
+    /// local pixels available for inference today and would surface in the
+    /// inbox as blank cards if they leaked through. When the toggle is off,
+    /// `visibleAssets` returns the full `assets` array, so this code path is
+    /// behaviour-compatible with the pre-F-08 default.
     func buildQueue() {
         // Compute the set of all album members across all known albums.
         let albumMembers: Set<String> = albumManager.albums.reduce(into: Set()) { result, album in
@@ -150,16 +158,17 @@ final class SortingCoordinator {
         }
 
         let embeddedIDs = source.embeddedAssetIDs(modelID: modelID)
+        let sourceAssets = photoController.visibleAssets
 
         let filteredIDs = SortingCoordinator.filterInbox(
-            allAssetIDs: photoController.assets.map(\.localIdentifier),
+            allAssetIDs: sourceAssets.map(\.localIdentifier),
             embedded: embeddedIDs,
             albumMembers: albumMembers
         )
 
         // Map filtered IDs back to PHAsset objects, preserving filtered order.
         let assetByID: [String: PHAsset] = Dictionary(
-            uniqueKeysWithValues: photoController.assets.map { ($0.localIdentifier, $0) }
+            uniqueKeysWithValues: sourceAssets.map { ($0.localIdentifier, $0) }
         )
         queue = filteredIDs.compactMap { assetByID[$0] }
         currentIndex = 0
@@ -313,13 +322,17 @@ final class SortingCoordinator {
     /// album), without building the full queue. Drives the grid's "N to sort"
     /// affordance. Safe to call on the main actor whenever the library or index
     /// changes.
+    ///
+    /// F-08: reads `photoController.visibleAssets` so the count agrees with
+    /// `buildQueue()` — flipping the "Hide iCloud photos" toggle must change
+    /// the affordance in lockstep with what the queue will actually contain.
     func unsortedCount() -> Int {
         let albumMembers = albumManager.albums.reduce(into: Set<String>()) { set, album in
             set.formUnion(albumManager.memberAssetIDs(of: album.id))
         }
         let embedded = source.embeddedAssetIDs(modelID: modelID)
         return SortingCoordinator.filterInbox(
-            allAssetIDs: photoController.assets.map(\.localIdentifier),
+            allAssetIDs: photoController.visibleAssets.map(\.localIdentifier),
             embedded: embedded,
             albumMembers: albumMembers
         ).count

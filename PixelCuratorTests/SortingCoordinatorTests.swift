@@ -162,6 +162,94 @@ final class SortingCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.sortedCount, 0)
     }
 
+    // MARK: - F-08 visibleAssets routing
+    //
+    // When `PhotoController.hideICloudPhotos` is on, `visibleAssets` filters
+    // out iCloud-only assets. `buildQueue()` and `unsortedCount()` must
+    // consult `visibleAssets` so iCloud-only assets cannot leak into the
+    // sort queue — they have no local pixels for inference today and would
+    // surface as blank cards.
+
+    @MainActor
+    func testBuildQueue_respectsHideICloudPhotos_excludesCloudOnlyAssets() {
+        let modelID = "test-variant"
+        let assetLocal = StubPHAsset(localIdentifier: "asset-local-A")
+        let assetCloud = StubPHAsset(localIdentifier: "asset-cloud-B")
+        let assetLocal2 = StubPHAsset(localIdentifier: "asset-local-C")
+
+        let library = PhotoController()
+        library.assets = [assetLocal, assetCloud, assetLocal2]
+        library.cloudOnlyAssetIDs = ["asset-cloud-B"]
+        library.hideICloudPhotos = true
+
+        let source = MockSuggestionSourcing()
+        // All three are embedded (pre-condition: indexing complete for the
+        // local pair; the iCloud one is "embedded" here only to prove that
+        // the visibility filter — not the embedded gate — keeps it out).
+        source.embeddedIDs[modelID] = ["asset-local-A", "asset-cloud-B", "asset-local-C"]
+
+        let albums = AlbumManager()
+        let coordinator = SortingCoordinator(
+            source: source,
+            suggester: AlbumSuggester(),
+            albumManager: albums,
+            photoController: library,
+            modelID: modelID,
+            decisionLog: DecisionLog(operations: MockAlbumOperations()),
+            correctionStore: nil
+        )
+
+        coordinator.buildQueue()
+
+        XCTAssertEqual(coordinator.queue.map(\.localIdentifier),
+                       ["asset-local-A", "asset-local-C"],
+                       "Hide-iCloud toggle ON must exclude iCloud-only assets from the queue " +
+                       "even when they are embedded")
+        XCTAssertEqual(coordinator.unsortedCount(), 2,
+                       "unsortedCount must agree with the queue under the hide toggle")
+    }
+
+    @MainActor
+    func testBuildQueue_hideICloudPhotosOff_includesAllEmbeddedAssets() {
+        // Behaviour-compatibility check: when the toggle is OFF,
+        // `visibleAssets` returns the full `assets` array, so the queue
+        // must include the iCloud-only embedded asset (today this is
+        // mostly hypothetical — iCloud-only assets can't be embedded —
+        // but the test pins the no-regression contract on the toggle-off
+        // path).
+        let modelID = "test-variant"
+        let assetLocal = StubPHAsset(localIdentifier: "asset-local-A")
+        let assetCloud = StubPHAsset(localIdentifier: "asset-cloud-B")
+        let assetLocal2 = StubPHAsset(localIdentifier: "asset-local-C")
+
+        let library = PhotoController()
+        library.assets = [assetLocal, assetCloud, assetLocal2]
+        library.cloudOnlyAssetIDs = ["asset-cloud-B"]
+        library.hideICloudPhotos = false
+
+        let source = MockSuggestionSourcing()
+        source.embeddedIDs[modelID] = ["asset-local-A", "asset-cloud-B", "asset-local-C"]
+
+        let albums = AlbumManager()
+        let coordinator = SortingCoordinator(
+            source: source,
+            suggester: AlbumSuggester(),
+            albumManager: albums,
+            photoController: library,
+            modelID: modelID,
+            decisionLog: DecisionLog(operations: MockAlbumOperations()),
+            correctionStore: nil
+        )
+
+        coordinator.buildQueue()
+
+        XCTAssertEqual(coordinator.queue.map(\.localIdentifier),
+                       ["asset-local-A", "asset-cloud-B", "asset-local-C"],
+                       "Hide-iCloud toggle OFF must leave the queue identical to the full asset list")
+        XCTAssertEqual(coordinator.unsortedCount(), 3,
+                       "unsortedCount must agree with the queue under the hide toggle")
+    }
+
     /// After filtering, assets that were album-members on a second pass
     /// (simulating what happens after accept advances) no longer appear.
     func testFilterInboxReflectsNewAlbumMembership() {

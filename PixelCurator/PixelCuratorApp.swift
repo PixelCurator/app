@@ -32,11 +32,21 @@ struct PixelCuratorApp: App {
     /// The active CLIP variant. Changing this triggers variant-switch orchestration.
     @State private var activeVariant: CLIPVariant = .bundledDefault
 
-    /// Entitlement provider. `DebugEntitlementProvider` is the default so the full
-    /// multi-variant pipeline is testable without App Store Connect products.
+    /// Entitlement provider.
     ///
-    /// ⚠️  DEVELOPMENT DEFAULT — replace with `StoreKitEntitlementProvider` before release.
+    /// DEBUG builds use `DebugEntitlementProvider` so the full multi-variant
+    /// pipeline is exercisable without App Store Connect products.
+    ///
+    /// RELEASE builds use `BundledOnlyEntitlementProvider`: only the bundled
+    /// `.s0` variant is unlocked, Pro variants stay locked. This is the
+    /// safe-for-App-Review default until StoreKit + ASC IAP products are
+    /// configured — at which point this `#else` branch flips to
+    /// `StoreKitEntitlementProvider()`.
+    #if DEBUG
     @State private var entitlements: any EntitlementProvider = DebugEntitlementProvider()
+    #else
+    @State private var entitlements: any EntitlementProvider = BundledOnlyEntitlementProvider()
+    #endif
 
     /// Guards against concurrent variant-switch calls.
     @State private var isSwitchingVariant = false

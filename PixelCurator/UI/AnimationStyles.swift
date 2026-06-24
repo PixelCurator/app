@@ -220,7 +220,10 @@ extension View {
 @MainActor
 func photoAccessibilityLabel(for asset: PHAsset) -> Text {
     if let date = asset.creationDate {
-        return Text("Photo from \(date, format: .dateTime.month().day().year())")
+        // Use the wide month name so VoiceOver reads "Foto vom 24. Juni 2026"
+        // instead of "Foto vom zwei vier punkt sechs punkt zwei null …" on DE
+        // (lektor M-01 — matches Photos.app date register).
+        return Text("Photo from \(date, format: .dateTime.day().month(.wide).year())")
     } else {
         return Text("Photo")
     }

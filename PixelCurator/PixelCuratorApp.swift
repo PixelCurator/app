@@ -71,7 +71,7 @@ struct PixelCuratorApp: App {
 
     init() {
         do {
-            modelContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
+            modelContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self, UnindexableAsset.self)
         } catch {
             fatalError("PixelCurator: failed to create the shared ModelContainer: \(error)")
         }

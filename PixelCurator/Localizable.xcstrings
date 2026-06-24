@@ -1206,7 +1206,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Indizierung war pausiert – wird fortgesetzt …"
+            "value": "Indizierung war pausiert – wird fortgesetzt…"
           }
         }
       }
@@ -1216,7 +1216,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Indizierung kann nicht starten"
+            "value": "Indizierung konnte nicht starten"
           }
         }
       }

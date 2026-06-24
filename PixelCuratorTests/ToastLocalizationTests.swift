@@ -142,7 +142,7 @@ final class ToastLocalizationTests: XCTestCase {
     func testBootErrorTitleHasDe() {
         let de = Locale(identifier: "de")
         let resolved = resolve("Couldn't prepare indexer", locale: de)
-        XCTAssertEqual(resolved, "Indizierung kann nicht starten")
+        XCTAssertEqual(resolved, "Indizierung konnte nicht starten")
     }
 
     func testBootErrorBodyHasDe() {

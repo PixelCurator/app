@@ -46,6 +46,12 @@ struct PhotoGridView: View {
     /// iOS sheet both end up flipping the controller's filter.
     @AppStorage("hideICloudPhotos") private var hideICloudPhotos: Bool = false
 
+    /// F-12. Persistent gate for the one-shot session-only Undo hint toast.
+    /// Defaults to `false`; flips to `true` the first time we render the
+    /// hint, never back to `false`. The DecisionLog fires its callback once
+    /// per app launch — this gate keeps the toast at most once per install.
+    @AppStorage("hasShownUndoSessionHint") private var hasShownUndoSessionHint: Bool = false
+
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
 
     var body: some View {
@@ -212,6 +218,19 @@ struct PhotoGridView: View {
                 // `visibleAssets` derived value sees the current setting on
                 // first render. The `.onChange` below handles subsequent flips.
                 library.hideICloudPhotos = hideICloudPhotos
+            }
+            // F-12. Observe the DecisionLog's first-decision hook (posted
+            // once per app launch from `PixelCuratorApp`) and surface the
+            // session-only Undo hint at most once per install. The
+            // `@AppStorage` gate is flipped immediately so a same-frame post
+            // observed by another view (SortingInboxView also subscribes)
+            // sees the flag as already shown — at most one toast renders.
+            .onReceive(NotificationCenter.default.publisher(
+                for: .pixelCuratorFirstDecisionRecorded
+            )) { _ in
+                guard !hasShownUndoSessionHint else { return }
+                hasShownUndoSessionHint = true
+                Task { await showToast(.localized("Undo lasts only this session.")) }
             }
             .onChange(of: hideICloudPhotos) { _, newValue in
                 library.hideICloudPhotos = newValue

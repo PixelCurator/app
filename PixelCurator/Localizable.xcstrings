@@ -871,16 +871,6 @@
         }
       }
     },
-    "Keep PixelCurator open. You can switch apps briefly — we'll keep working in the background for a few minutes.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lass PixelCurator geöffnet. Du kannst kurz zu einer anderen App wechseln – wir arbeiten dann noch wenige Minuten im Hintergrund weiter."
-          }
-        }
-      }
-    },
     "Photo %lld of %lld": {
       "localizations": {
         "de": {
@@ -1147,6 +1137,106 @@
           "stringUnit": {
             "state": "translated",
             "value": "Keine ähnlichen Fotos in dieser Mediathek."
+          }
+        }
+      }
+    },
+    "Moved to %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nach %@ verschoben"
+          }
+        }
+      }
+    },
+    "Move failed — could not add to %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschieben fehlgeschlagen – konnte nicht zu %@ hinzufügen."
+          }
+        }
+      }
+    },
+    "Move failed — asset kept in %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschieben fehlgeschlagen – Foto bleibt in %@."
+          }
+        }
+      }
+    },
+    "Move partially failed — please review in Photos.app.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschieben teilweise fehlgeschlagen – bitte in Fotos prüfen."
+          }
+        }
+      }
+    },
+    "Failed": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehlgeschlagen"
+          }
+        }
+      }
+    },
+    "Keep PixelCurator open. Indexing pauses if you switch apps.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Behalte PixelCurator im Vordergrund. Wenn du in eine andere App wechselst, wird die Indizierung pausiert."
+          }
+        }
+      }
+    },
+    "Indexing paused while away — resuming…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indizierung war pausiert – wird fortgesetzt …"
+          }
+        }
+      }
+    },
+    "Couldn't prepare indexer": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indizierung kann nicht starten"
+          }
+        }
+      }
+    },
+    "Indexing isn't available right now. Try again — if the problem persists, restart PixelCurator.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Indizierung ist gerade nicht verfügbar. Versuche es erneut – falls das Problem bleibt, starte PixelCurator neu."
+          }
+        }
+      }
+    },
+    "Try again": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut versuchen"
           }
         }
       }

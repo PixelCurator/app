@@ -226,6 +226,28 @@ func photoAccessibilityLabel(for asset: PHAsset) -> Text {
     }
 }
 
+// MARK: - ToastMessage
+
+/// A toast payload that distinguishes catalog-bound copy from raw error
+/// strings.
+///
+/// - `localized` — a `LocalizedStringResource` so SwiftUI's `Text(_:)` and
+///   `VoiceOver.announce(_:)` resolve against the catalog at render time
+///   (the German user sees German on a German device).
+/// - `verbatim` — a pre-formed `String` (typically `localizedDescription`
+///   from an underlying OS error, or a value-only message like an album
+///   identifier) that must NOT go through the catalog lookup. Rendering
+///   uses `Text(verbatim:)`, which bypasses `LocalizedStringKey` interpolation.
+///
+/// Existing per-view toast state was `String?`, which produced English-only
+/// output on every device because `Text.init(_:String)` is the verbatim
+/// initializer. Switching to this enum localizes the template messages while
+/// preserving the pass-through behaviour for already-formed error strings.
+enum ToastMessage {
+    case localized(LocalizedStringResource)
+    case verbatim(String)
+}
+
 // MARK: - VoiceOver helpers
 
 /// Cross-platform helpers for posting VoiceOver announcements.
@@ -247,10 +269,25 @@ enum VoiceOver {
         #endif
     }
 
-    /// Posts `message` to VoiceOver if (and only if) the user is listening.
-    /// Uses the modern cross-platform `AccessibilityNotification.Announcement`
-    /// API available on iOS 17 / macOS 14.
-    static func announce(_ message: String) {
+    /// Posts a localized announcement to VoiceOver if (and only if) the user
+    /// is listening. Uses the modern cross-platform
+    /// `AccessibilityNotification.Announcement` API available on iOS 17 / macOS 14.
+    ///
+    /// `LocalizedStringResource` is the canonical Swift 5.9+ vehicle for
+    /// passing a catalog-bound, locale-resolved string across module
+    /// boundaries — unlike a raw `String`, it carries the source key plus a
+    /// bundle/locale binding, so the lookup happens at the point of use
+    /// rather than at construction. This is what makes toasts speak German
+    /// on German devices.
+    static func announce(_ resource: LocalizedStringResource) {
+        guard isRunning else { return }
+        AccessibilityNotification.Announcement(String(localized: resource)).post()
+    }
+
+    /// Plain-`String` overload for messages that are NOT translatable —
+    /// asset identifiers, numeric error codes, etc. Catalog-bound user-facing
+    /// copy MUST use the `LocalizedStringResource` overload.
+    static func announce(verbatim message: String) {
         guard isRunning else { return }
         AccessibilityNotification.Announcement(message).post()
     }

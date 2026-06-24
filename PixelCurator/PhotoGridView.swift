@@ -35,7 +35,7 @@ struct PhotoGridView: View {
     @State private var selectedAsset: PHAsset?
     @State private var assignAssetItem: IdentifiableAsset?
     @State private var similarAssetItem: IdentifiableAsset?
-    @State private var toast: String?
+    @State private var toast: ToastMessage?
     @State private var showVariantSettings = false
     @State private var showAppSettings = false
     @State private var unsortedCount: Int = 0
@@ -161,13 +161,20 @@ struct PhotoGridView: View {
             }
             .overlay(alignment: .bottom) {
                 if let toast {
-                    Text(toast)
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(.bottom, 24)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .accessibilityAddTraits(.updatesFrequently)
+                    Group {
+                        switch toast {
+                        case .localized(let resource):
+                            Text(resource)
+                        case .verbatim(let string):
+                            Text(verbatim: string)
+                        }
+                    }
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .accessibilityAddTraits(.updatesFrequently)
                 }
             }
             .sheet(item: $assignAssetItem) { item in
@@ -252,11 +259,11 @@ struct PhotoGridView: View {
             Task {
                 await decisionLog?.undo()
                 if let name = decisionLog?.lastUndoneAlbumName {
-                    await showToast("Removed from \(name)")
+                    await showToast(.localized("Removed from \(name)"))
                 } else if let error = decisionLog?.lastUndoError {
                     // Surface the failure — otherwise the user
                     // sees nothing and assumes Undo is broken.
-                    await showToast(error)
+                    await showToast(.verbatim(error))
                 }
             }
         } label: {
@@ -310,15 +317,26 @@ struct PhotoGridView: View {
             case .failed:
                 ok = false
             }
-            await showToast(ok ? "Added to \(albumName)" : (albums.lastError ?? "Failed"))
+            if ok {
+                await showToast(.localized("Added to \(albumName)"))
+            } else if let lastError = albums.lastError {
+                await showToast(.verbatim(lastError))
+            } else {
+                await showToast(.localized("Failed"))
+            }
         }
     }
 
     @MainActor
-    private func showToast(_ message: String) async {
+    private func showToast(_ message: ToastMessage) async {
         let animation: Animation? = reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.75)
         withAnimation(animation) { toast = message }
-        VoiceOver.announce(message)
+        switch message {
+        case .localized(let resource):
+            VoiceOver.announce(resource)
+        case .verbatim(let string):
+            VoiceOver.announce(verbatim: string)
+        }
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(animation) { toast = nil }
     }

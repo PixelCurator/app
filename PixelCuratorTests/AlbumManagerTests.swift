@@ -203,6 +203,73 @@ final class AlbumManagerTests: XCTestCase {
         XCTAssertEqual(fake.performChangesCallCount, 0)
     }
 
+    // MARK: - F-03: remove pre-checks membership
+
+    /// **F-03**: PhotoKit's `PHAssetCollectionChangeRequest.removeAssets(_:)`
+    /// is idempotent — passing an asset that is not a member of the collection
+    /// resolves successfully. Without a pre-check `AlbumManager` would return
+    /// `true` for a no-op remove and the undo path would render a phantom
+    /// "Removed from <Album>" toast.
+    ///
+    /// The fake adapter cannot fabricate a populated `PHFetchResult<PHAssetCollection>`
+    /// (PHFetchResult has no public init), so we exercise `performRemove`
+    /// directly via the `@testable` internal entry point. The fake's
+    /// `fetchAssets(in:options:)` already returns empty by construction —
+    /// which is exactly the "asset is not a member" state the guard is meant
+    /// to short-circuit on. The contract being pinned: `performRemove` must
+    /// return `false`, set `lastError`, and **not** issue a `performChanges`
+    /// write.
+    func testPerformRemove_assetNotMemberOfAlbum_returnsFalseAndSkipsPerformChanges() async {
+        let fake = FakePHPhotoLibraryAdapter()
+        let manager = AlbumManager(adapter: fake)
+        let asset = StubPHAsset(localIdentifier: "asset-not-in-album")
+        let collection = StubPHAssetCollection()
+
+        let ok = await manager.performRemove(asset, from: collection)
+
+        XCTAssertFalse(ok, "Remove must report failure when the asset isn't actually a member")
+        XCTAssertEqual(manager.lastError, "Asset is no longer in the album.")
+        XCTAssertEqual(fake.performChangesCallCount, 0,
+                       "F-03: no PhotoKit write may be issued for a no-op remove")
+    }
+
+    // MARK: - F-04: findOrCreateAlbum disambiguation
+
+    /// **F-04**: when Photos.app contains duplicate-titled albums,
+    /// `findOrCreateAlbum` must pick deterministically rather than letting
+    /// PhotoKit pick whichever it enumerates first. The fix asks PhotoKit to
+    /// sort by `creationDate` descending so `firstObject` resolves to the
+    /// most-recently-created album of that title.
+    ///
+    /// This test pins the **contract at the seam**: the `PHFetchOptions`
+    /// passed to `fetchAssetCollections(with:subtype:options:)` carries a
+    /// `creationDate` descending sort descriptor and a title predicate. We
+    /// cannot fabricate a populated `PHFetchResult` to exercise the picker
+    /// over real collections (PHFetchResult has no public init), but pinning
+    /// the seam contract is sufficient — PhotoKit's documented behaviour is
+    /// to honour the sort order.
+    func testFindOrCreateAlbum_passesCreationDateDescendingSortToFetch() async {
+        let fake = FakePHPhotoLibraryAdapter()
+        let manager = AlbumManager(adapter: fake)
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+
+        // Trigger the find path (will create because every fake fetch is
+        // empty). The interesting assertion is on the options captured by the
+        // fake's title-predicate fetch, not on the eventual result.
+        _ = await manager.assignAndResolve(asset, toAlbumNamed: "Sunset")
+
+        guard let captured = fake.lastTitlePredicateOptions else {
+            XCTFail("Expected `findOrCreateAlbum` to issue a title-predicate fetch with options")
+            return
+        }
+        let descriptors = captured.sortDescriptors ?? []
+        XCTAssertEqual(descriptors.count, 1, "Exactly one sort descriptor expected")
+        XCTAssertEqual(descriptors.first?.key, "creationDate")
+        XCTAssertEqual(descriptors.first?.ascending, false,
+                       "F-04: must sort descending so firstObject = most recently created")
+        XCTAssertEqual(captured.predicate?.predicateFormat, "localizedTitle == \"Sunset\"")
+    }
+
     // MARK: - assign(toAlbumNamed:) thin wrapper preserves failure
 
     /// The Bool-returning `assign(_:toAlbumNamed:)` is kept for
@@ -226,6 +293,30 @@ final class AlbumManagerTests: XCTestCase {
         XCTAssertEqual(manager.lastError, "Access restricted.")
     }
 
+    // MARK: - F-04: existing path still allows test of empty-result fast path
+
+    /// When no album of the requested name exists, the count is 0 — the
+    /// disambiguation logger must not fire (it only fires for `> 1` matches).
+    /// This pins the no-noise behaviour: a normal user with no duplicates
+    /// must not see the "disambiguated N albums" notice in Console.
+    ///
+    /// We can't directly assert on the Logger output in a unit test, but we
+    /// can pin the fast-path return: assignAndResolve still proceeds into the
+    /// create branch (which `.failed`s in the fake) and the captured options
+    /// still carry the F-04 sort descriptor.
+    func testFindOrCreateAlbum_noMatches_stillSetsSortDescriptorAndProceedsToCreate() async {
+        let fake = FakePHPhotoLibraryAdapter()
+        let manager = AlbumManager(adapter: fake)
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+
+        let result = await manager.assignAndResolve(asset, toAlbumNamed: "Sunset")
+
+        XCTAssertEqual(result, .failed,
+                       "Fake can't fabricate created collections → create attempt resolves to .failed")
+        XCTAssertEqual(fake.lastTitlePredicateOptions?.sortDescriptors?.first?.key, "creationDate")
+        XCTAssertEqual(fake.lastTitlePredicateOptions?.sortDescriptors?.first?.ascending, false)
+    }
+
     // MARK: - Default-init back-compat (production code constructs AlbumManager() without args)
 
     /// AlbumManager's default initialiser must remain callable without
@@ -238,4 +329,14 @@ final class AlbumManagerTests: XCTestCase {
         XCTAssertTrue(manager.albums.isEmpty)
         XCTAssertNil(manager.lastError)
     }
+}
+
+// MARK: - StubPHAssetCollection
+//
+// Sibling to `StubPHAsset`. PHAssetCollection is NSObject-backed so it can be
+// subclassed for tests. We don't override any properties — the F-03 tests only
+// pass the instance through to `AlbumManager.performRemove`, which routes
+// membership inspection back into the fake adapter.
+final class StubPHAssetCollection: PHAssetCollection, @unchecked Sendable {
+    override init() { super.init() }
 }

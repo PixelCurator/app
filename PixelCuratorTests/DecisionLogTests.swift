@@ -828,3 +828,194 @@ final class DecisionLogAlgorithmTests: XCTestCase {
         XCTAssertEqual(stack.undoStack.map(\.albumName), ["A", "B", "C"])
     }
 }
+
+// MARK: - F-15: MoveDecision recording, undo, redo
+//
+// Covers the move primitive end-to-end through the AlbumOperations mock so
+// the contract is pinned without touching PhotoKit:
+//   • `recordMove` lands the entry on the unified undo stack (visible via
+//     `undoEntries`) but is filtered out of the legacy `undoStack`
+//     (which only exposes assignment decisions for back-compat).
+//   • `undo()` of a move executes `assign(toAlbumWithID: source)` then
+//     `remove(fromAlbumWithID: target)` in that order — the "re-add to
+//     source first" discipline that prevents an intermediate observer from
+//     seeing the asset in neither album.
+//   • `redo()` of a move executes the original `assign(toAlbumWithID: target)`
+//     then `remove(fromAlbumWithID: source)` pair.
+//   • Both halves use the by-id `AlbumOperations` surface to stay safe
+//     against duplicate-named albums.
+//   • Failure of the first step short-circuits — second step never runs.
+
+@MainActor
+final class MoveDecisionTests: XCTestCase {
+
+    var mock: MockAlbumOperations!
+    var log: DecisionLog!
+
+    override func setUp() async throws {
+        mock = MockAlbumOperations()
+        log = DecisionLog(operations: mock)
+    }
+
+    // MARK: - Recording
+
+    func testRecordMove_pushesOntoUnifiedUndoStack_filteredOutOfLegacyStack() {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "source-id",
+            sourceAlbumName: "Source",
+            targetAlbumID: "target-id",
+            targetAlbumName: "Target"
+        )
+
+        XCTAssertTrue(log.canUndo)
+        XCTAssertEqual(log.undoEntries.count, 1, "Move lands on the unified stack")
+        if case .move(let d) = log.undoEntries.first {
+            XCTAssertEqual(d.sourceAlbumID, "source-id")
+            XCTAssertEqual(d.targetAlbumID, "target-id")
+        } else {
+            XCTFail("Expected .move entry on undoEntries")
+        }
+
+        XCTAssertTrue(log.undoStack.isEmpty,
+                      "Legacy assignment-only accessor filters moves out — back-compat with pre-F-15 tests")
+    }
+
+    // MARK: - Undo
+
+    func testUndoMove_reAddsToSourceThenRemovesFromTarget_inOrder_viaByID() async {
+        let asset = StubPHAsset(localIdentifier: "asset-42")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id",
+            sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id",
+            targetAlbumName: "Target"
+        )
+
+        await log.undo()
+
+        // Exactly two by-id calls, in the documented order.
+        XCTAssertEqual(mock.calls.count, 2)
+        XCTAssertEqual(mock.calls[0], MockAlbumOperations.Call(
+            kind: .assign, surface: .byID, assetID: "asset-42", target: "src-id"),
+            "Undo of a move must re-add to source first (so the asset is never in neither album)")
+        XCTAssertEqual(mock.calls[1], MockAlbumOperations.Call(
+            kind: .remove, surface: .byID, assetID: "asset-42", target: "tgt-id"),
+            "…then remove from target")
+
+        // Toast / observer state.
+        XCTAssertEqual(log.lastUndoneAlbumName, "Source",
+                       "Toast should read 'restored to Source'")
+        XCTAssertNil(log.lastUndoError)
+
+        // Entry moved to redo.
+        XCTAssertFalse(log.canUndo)
+        XCTAssertEqual(log.redoEntries.count, 1)
+    }
+
+    func testUndoMove_restoreToSourceFails_secondStepNeverRuns_setsError() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id", sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id", targetAlbumName: "Target"
+        )
+        mock.assignShouldSucceed = false
+
+        await log.undo()
+
+        XCTAssertEqual(mock.calls.count, 1, "Second step must short-circuit when re-add fails")
+        XCTAssertEqual(mock.calls[0].kind, .assign)
+        XCTAssertNotNil(log.lastUndoError)
+        XCTAssertNil(log.lastUndoneAlbumName)
+        // First-failure rollback: entry returned to undo stack.
+        XCTAssertTrue(log.canUndo)
+    }
+
+    func testUndoMove_targetRemoveFails_surfaceOrphanError() async {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id", sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id", targetAlbumName: "Target"
+        )
+        // Re-add succeeds, remove fails.
+        mock.assignShouldSucceed = true
+        mock.removeShouldSucceed = false
+
+        await log.undo()
+
+        XCTAssertEqual(mock.calls.count, 2)
+        XCTAssertNotNil(log.lastUndoError)
+        XCTAssertTrue(log.lastUndoError?.contains("Source") == true,
+                      "Error must mention source so the user knows the partial state")
+        XCTAssertTrue(log.lastUndoError?.contains("Target") == true,
+                      "Error must mention target")
+    }
+
+    // MARK: - Redo
+
+    func testRedoMove_reAssignsTargetThenRemovesSource_inOrder_viaByID() async {
+        let asset = StubPHAsset(localIdentifier: "asset-42")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id", sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id", targetAlbumName: "Target"
+        )
+
+        // Undo to populate the redo stack, then clear the recorded calls.
+        await log.undo()
+        mock.calls.removeAll()
+
+        await log.redo()
+
+        XCTAssertEqual(mock.calls.count, 2)
+        XCTAssertEqual(mock.calls[0], MockAlbumOperations.Call(
+            kind: .assign, surface: .byID, assetID: "asset-42", target: "tgt-id"),
+            "Redo of a move = original move sequence (assign target first)")
+        XCTAssertEqual(mock.calls[1], MockAlbumOperations.Call(
+            kind: .remove, surface: .byID, assetID: "asset-42", target: "src-id"),
+            "…then remove from source")
+
+        XCTAssertEqual(log.lastRedoneAlbumName, "Target")
+        XCTAssertNil(log.lastRedoError)
+        XCTAssertTrue(log.canUndo)
+    }
+
+    // MARK: - Prune
+
+    func testPruneMove_dropsWhenSourceOrTargetAlbumGone() {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id", sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id", targetAlbumName: "Target"
+        )
+
+        // Target gone → move must drop.
+        let dropped = log.prune(
+            keepingAssets: ["asset-1"],
+            livingAlbumIDs: ["src-id"]   // target missing
+        )
+        XCTAssertEqual(dropped, 1)
+        XCTAssertFalse(log.canUndo)
+    }
+
+    func testPruneMove_keepsWhenBothAlbumsAlive() {
+        let asset = StubPHAsset(localIdentifier: "asset-1")
+        log.recordMove(
+            asset: asset,
+            sourceAlbumID: "src-id", sourceAlbumName: "Source",
+            targetAlbumID: "tgt-id", targetAlbumName: "Target"
+        )
+
+        let dropped = log.prune(
+            keepingAssets: ["asset-1"],
+            livingAlbumIDs: ["src-id", "tgt-id"]
+        )
+        XCTAssertEqual(dropped, 0)
+        XCTAssertTrue(log.canUndo)
+    }
+}

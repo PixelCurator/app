@@ -2,6 +2,13 @@
 import SwiftUI
 import OSLog
 
+// MARK: - Module-level logger
+
+/// Subsystem-wide logger shared with `AlbumManager.signposter` so the
+/// F-04 disambiguation events show up in the same Console filter the
+/// performance-perf signposts already use.
+private let albumLog = Logger(subsystem: "yves.vogl.pixelcurator", category: "AlbumManager")
+
 // MARK: - AssignResolving (testable seam for SortingCoordinator)
 
 /// A narrow protocol that exposes only the surface `SortingCoordinator` needs
@@ -290,7 +297,31 @@ final class AlbumManager: AlbumOperations, AssignResolving {
         return await performRemove(asset, from: collection)
     }
 
-    private func performRemove(_ asset: PHAsset, from collection: PHAssetCollection) async -> Bool {
+    /// Internal so `AlbumManagerTests` can drive the F-03 membership guard
+    /// without needing to fabricate a populated `PHFetchResult` from the
+    /// fake adapter (PHFetchResult has no public init). Tests construct a
+    /// stub `PHAssetCollection` subclass directly and call this method —
+    /// the path under test (the guard) does not depend on the collection's
+    /// internal state, only on the fake adapter's `fetchAssets(in:options:)`
+    /// returning empty.
+    internal func performRemove(_ asset: PHAsset, from collection: PHAssetCollection) async -> Bool {
+        // F-03: pre-check membership before the `performChanges` call.
+        //
+        // PhotoKit's `PHAssetCollectionChangeRequest.removeAssets(_:)` is
+        // idempotent at the collection level — passing an asset that is not
+        // a member resolves successfully and the change request completes
+        // with no error. From `AlbumManager`'s perspective the call returned
+        // `true`, which the undo path then converts into a phantom "Removed
+        // from <Album>" toast even though the library is unchanged.
+        //
+        // The fix has to live here (not in `DecisionLog`) so every removal
+        // entry point — direct remove from the album detail view, the move
+        // flow's source-remove, and `DecisionLog.undo()`'s rollback of a
+        // recorded assignment — benefits from the same guard.
+        guard isAsset(asset, memberOf: collection) else {
+            lastError = "Asset is no longer in the album."
+            return false
+        }
         do {
             try await adapter.performChanges {
                 guard let request = PHAssetCollectionChangeRequest(for: collection) else { return }
@@ -336,10 +367,31 @@ final class AlbumManager: AlbumOperations, AssignResolving {
     }
 
     private func actuallyFindOrCreateAlbum(named name: String) async throws -> PHAssetCollection {
-        // Existing album with this exact title?
+        // F-04: Photos.app permits multiple user albums with identical titles.
+        // The previous implementation used `existing.firstObject` directly,
+        // which is non-deterministic — PhotoKit enumerates collections in
+        // creation order on iOS but the order is not part of any public
+        // contract and macOS has been observed to differ. Without a tie
+        // breaker, two albums called "Sunset" silently bind to whichever
+        // PhotoKit emits first.
+        //
+        // Fix: ask PhotoKit to sort by `creationDate` descending so
+        // `firstObject` deterministically resolves to the **most recently
+        // created** album of that title. The intuition: when the user types
+        // "Sunset" into the custom-album naming sheet, they almost certainly
+        // mean the one they made most recently — older duplicates are
+        // typically the abandoned half of a forgotten rename.
+        //
+        // When the lookup actually disambiguates (count > 1) we log the
+        // event so we can see in Console whether duplicate-named albums are
+        // common enough to warrant a UI-level warning in the naming sheet.
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localizedTitle = %@", name)
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let existing = adapter.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        if existing.count > 1 {
+            albumLog.notice("findOrCreateAlbum: disambiguated \(existing.count, privacy: .public) albums titled \"\(name, privacy: .public)\" — picking most recently created")
+        }
         if let found = existing.firstObject {
             return found
         }

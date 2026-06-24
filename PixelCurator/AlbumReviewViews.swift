@@ -77,6 +77,7 @@ struct AlbumDetailView: View {
 
     @Environment(AlbumManager.self) private var albumManager
     @Environment(PhotoController.self) private var library
+    @Environment(\.decisionLog) private var decisionLog
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var assets: [PHAsset] = []
@@ -192,6 +193,20 @@ struct AlbumDetailView: View {
 
         switch outcome {
         case .moved(_, let targetTitle):
+            // F-15: record the move on the shared DecisionLog so the user
+            // has an Undo affordance symmetric with accept / assignTo /
+            // batchAssign. Only the `.moved` case records — failure and
+            // rollback outcomes leave the library unchanged, so recording
+            // them would mis-report the next undo. The MoveDecision carries
+            // both album ids so its undo can route through the
+            // duplicate-name-safe by-id `AlbumOperations` surface.
+            decisionLog?.recordMove(
+                asset: asset,
+                sourceAlbumID: source.id,
+                sourceAlbumName: source.title,
+                targetAlbumID: target.id,
+                targetAlbumName: target.title
+            )
             await showToast("Moved to \(targetTitle)")
         case .assignFailed(let targetTitle, _):
             await showToast(albumManager.lastError ?? "Move failed — could not add to \(targetTitle).")

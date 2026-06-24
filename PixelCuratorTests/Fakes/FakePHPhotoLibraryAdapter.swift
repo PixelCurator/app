@@ -49,6 +49,14 @@ final class FakePHPhotoLibraryAdapter: PHPhotoLibraryAdapter, @unchecked Sendabl
     /// (none currently) can flip this to `true`.
     var invokesChangeBlock: Bool = false
 
+    // MARK: - Fetch scripting (F-04)
+
+    /// Captures the `PHFetchOptions` from the most recent title-predicate
+    /// `fetchAssetCollections(with:subtype:options:)` call. F-04 tests assert
+    /// on the sort descriptor / predicate combination passed to the seam to
+    /// pin the deterministic-disambiguation contract.
+    private(set) var lastTitlePredicateOptions: PHFetchOptions?
+
     // MARK: - PHPhotoLibraryAdapter
 
     func performChanges(_ changeBlock: @escaping () -> Void) async throws {
@@ -71,7 +79,14 @@ final class FakePHPhotoLibraryAdapter: PHPhotoLibraryAdapter, @unchecked Sendabl
         subtype: PHAssetCollectionSubtype,
         options: PHFetchOptions?
     ) -> PHFetchResult<PHAssetCollection> {
-        Self.emptyAssetCollections()
+        // Capture options whenever the call carries a predicate — that is the
+        // "find album by title" code path that F-04 inspects. The top-level
+        // album-list refresh issues this method with `options == nil` and
+        // must not clobber the F-04 capture.
+        if options?.predicate != nil {
+            lastTitlePredicateOptions = options
+        }
+        return Self.emptyAssetCollections()
     }
 
     func fetchAssetCollections(
@@ -85,6 +100,9 @@ final class FakePHPhotoLibraryAdapter: PHPhotoLibraryAdapter, @unchecked Sendabl
         in collection: PHAssetCollection,
         options: PHFetchOptions?
     ) -> PHFetchResult<PHAsset> {
+        // Always empty: the F-03 guard treats an empty membership result as
+        // "asset is not in this album", which is exactly the no-op-remove
+        // scenario the tests pin.
         Self.emptyAssets()
     }
 

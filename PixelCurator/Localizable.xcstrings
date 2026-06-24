@@ -1120,6 +1120,36 @@
           }
         }
       }
+    },
+    "Photo not available on device": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Foto auf diesem Gerät nicht verfügbar"
+          }
+        }
+      }
+    },
+    "Open this photo in Photos.app to download the original from iCloud, then try again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffne dieses Foto in der Fotos-App, um das Original aus iCloud zu laden, und versuche es danach erneut."
+          }
+        }
+      }
+    },
+    "No similar photos in this library.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine ähnlichen Fotos in dieser Mediathek."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

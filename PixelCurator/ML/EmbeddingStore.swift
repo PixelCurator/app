@@ -101,4 +101,58 @@ struct EmbeddingStore {
         }
         return deleted
     }
+
+    // MARK: - Unindexable set (F-22)
+
+    /// Returns every persisted `UnindexableAsset` for `modelID`, keyed by
+    /// `assetID` for O(1) lookup by the indexer.
+    ///
+    /// Returns an empty dictionary if the container's schema lacks
+    /// `UnindexableAsset.self` (production today, until the orchestrator
+    /// wires the model into the shared `ModelContainer`). This degrades
+    /// behaviour to "no persistence" rather than crashing — the F-22 loop
+    /// will still re-attempt each launch, but never trap.
+    func unindexableRecords(modelID: String) -> [String: UnindexableAsset] {
+        // NOTE: in-Swift filter avoids a SwiftData #Predicate trap on iOS 26.
+        guard let all = try? context.fetch(FetchDescriptor<UnindexableAsset>()) else {
+            return [:]
+        }
+        var byAssetID: [String: UnindexableAsset] = [:]
+        for row in all where row.modelID == modelID {
+            byAssetID[row.assetID] = row
+        }
+        return byAssetID
+    }
+
+    /// Records that the indexer attempted `assetID` for `modelID` and could
+    /// not retrieve pixels. Overwrites any prior record (refreshes
+    /// `modificationDate` to the latest attempt).
+    func markUnindexable(
+        assetID: String,
+        modelID: String,
+        modificationDate: Date?,
+        reason: String = "nilCGImage"
+    ) {
+        // Best-effort fetch of the prior row so we replace it rather than
+        // dupe-trap on the `@Attribute(.unique)` key. Silent no-op if the
+        // schema isn't present.
+        if let existing = unindexableRecords(modelID: modelID)[assetID] {
+            context.delete(existing)
+        }
+        let row = UnindexableAsset(
+            modelID: modelID,
+            assetID: assetID,
+            modificationDate: modificationDate,
+            reason: reason
+        )
+        context.insert(row)
+    }
+
+    /// Deletes the `UnindexableAsset` row for `(modelID, assetID)`, if any.
+    /// Called after a successful retry so the row doesn't outlive its cause.
+    func clearUnindexable(assetID: String, modelID: String) {
+        if let existing = unindexableRecords(modelID: modelID)[assetID] {
+            context.delete(existing)
+        }
+    }
 }

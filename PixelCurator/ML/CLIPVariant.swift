@@ -41,7 +41,7 @@ enum CLIPVariant: String, CaseIterable, Sendable, Identifiable {
         case .s0: return "mobileclip_s0_image.mlpackage"
         case .s1: return "mobileclip_s1_image.mlpackage"
         case .s2: return "mobileclip_s2_image.mlpackage"
-        case .b:  return "mobileclip_b_image.mlpackage"
+        case .b:  return "mobileclip_blt_image.mlpackage"
         }
     }
 

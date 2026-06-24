@@ -53,7 +53,7 @@ enum ModelManifest {
     ///
     /// The unit-test suite calls `verifyChecksum(data:expectedHex:)` directly
     /// and is independent of this flag.
-    static let verifyDownloads: Bool = false
+    static let verifyDownloads: Bool = true
 
     // MARK: - Upstream pin
 
@@ -64,11 +64,9 @@ enum ModelManifest {
     /// even if the branch tip moves. Bumping this requires regenerating
     /// every `sha256` below.
     ///
-    /// TODO_commit_sha: replace with the actual commit you measured the
-    /// hashes against. The placeholder is intentionally invalid so a build
-    /// that flips `verifyDownloads = true` without updating the manifest
-    /// fails loudly instead of silently downloading from `main`.
-    static let commitSHA: String = "TODO_commit_sha_replace_before_release"
+    /// Measured 2026-06-24 against the latest commit on `main` at that
+    /// time. Bump alongside refreshing every per-file `sha256` below.
+    static let commitSHA: String = "3e0a7bfb9fe83da8a3efaa3fd8f7df24214bb947"
 
     // MARK: - Per-variant file list
 
@@ -102,45 +100,49 @@ enum ModelManifest {
             return [
                 File(
                     suffix: "mobileclip_s1_image.mlpackage/Manifest.json",
-                    sha256: "TODO_sha256_s1_manifest_json"
+                    sha256: "902dc75013a87c745008184e08cec9172b060cbc7940a16ca2274fc11f4b3021"
                 ),
                 File(
                     suffix: "mobileclip_s1_image.mlpackage/Data/com.apple.CoreML/model.mlmodel",
-                    sha256: "TODO_sha256_s1_model_mlmodel"
+                    sha256: "3b1cc781d6d0af08d95d338b083ae6fb97315cc5810037ceb34bc4b19ea41219"
                 ),
                 File(
                     suffix: "mobileclip_s1_image.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
-                    sha256: "TODO_sha256_s1_weight_bin"
+                    sha256: "0d817354a9b98b17f289d1f3e398c1f21d1f7e659ae04d18aa7f94e5a3283da2"
                 ),
             ]
         case .s2:
             return [
                 File(
                     suffix: "mobileclip_s2_image.mlpackage/Manifest.json",
-                    sha256: "TODO_sha256_s2_manifest_json"
+                    sha256: "6a1a3f93b8dca6c237dbb5dc7b19bb3c987042d14860288304986c099d8796b6"
                 ),
                 File(
                     suffix: "mobileclip_s2_image.mlpackage/Data/com.apple.CoreML/model.mlmodel",
-                    sha256: "TODO_sha256_s2_model_mlmodel"
+                    sha256: "2aeb3359f6cde65e9f9248ec2a742e9939bd4bbf48c2f55fcd255b4504d96a1b"
                 ),
                 File(
                     suffix: "mobileclip_s2_image.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
-                    sha256: "TODO_sha256_s2_weight_bin"
+                    sha256: "6cbc7fb06b6072c1cae9c4496d67e0e6217adbf726dfeb82e44d4efe87c34c00"
                 ),
             ]
         case .b:
+            // The "B" variant ships in HuggingFace as `mobileclip_blt_*` —
+            // not `mobileclip_b_*`. CLIPVariant.imageEncoderPackageName
+            // returns the correct `mobileclip_blt_image.mlpackage` suffix;
+            // these entries must match.
             return [
                 File(
-                    suffix: "mobileclip_b_image.mlpackage/Manifest.json",
-                    sha256: "TODO_sha256_b_manifest_json"
+                    suffix: "mobileclip_blt_image.mlpackage/Manifest.json",
+                    sha256: "112a034d18e8c76b21e491a94ee8236e6989021c13dfe9ea8ecd3ac6dc2bdabe"
                 ),
                 File(
-                    suffix: "mobileclip_b_image.mlpackage/Data/com.apple.CoreML/model.mlmodel",
-                    sha256: "TODO_sha256_b_model_mlmodel"
+                    suffix: "mobileclip_blt_image.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+                    sha256: "3acaec5c9eca2f27b7dc6d3bffb19cbb94d34e97cdd8aec70987e4ae7de09fae"
                 ),
                 File(
-                    suffix: "mobileclip_b_image.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
-                    sha256: "TODO_sha256_b_weight_bin"
+                    suffix: "mobileclip_blt_image.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+                    sha256: "c12ec418eadf5d536f11e2e575b26c0d0bbc1270a7080d97f218a0a11595c289"
                 ),
             ]
         }

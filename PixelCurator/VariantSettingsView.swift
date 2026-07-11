@@ -108,7 +108,8 @@ struct VariantSettingsView: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel(Text("Purchasing…"))
-            } else {
+            } else if entitlements is StoreKitEntitlementProvider {
+                // StoreKit-backed provider: offer the live Unlock affordance.
                 HStack(spacing: 6) {
                     Image(systemName: "lock.fill")
                         .foregroundStyle(.secondary)
@@ -119,6 +120,20 @@ struct VariantSettingsView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .accessibilityLabel(Text("Unlock \(LocalizedStringKey(variant.displayName))"))
+                }
+            } else {
+                // Non-StoreKit provider (e.g. `BundledOnlyEntitlementProvider`
+                // in the Beta release): there is no purchase path yet, so do
+                // not offer an "Unlock" button that silently no-ops. Show a
+                // tasteful "Coming soon" subtitle instead.
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Coming soon")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(Text("Coming soon"))
                 }
             }
         }

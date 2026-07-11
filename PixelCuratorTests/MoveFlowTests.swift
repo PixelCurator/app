@@ -116,6 +116,87 @@ final class MoveFlowTests: XCTestCase {
     // this never reaches `AlbumMover.move` in production. But the helper must
     // still be well-defined if a caller bypasses the filter.
 
+    // MARK: - F-15: move records DecisionLog entry on success
+    //
+    // The view-level (`AlbumDetailView.move`) recording call only fires on
+    // `.moved`; failure / rollback outcomes must not record. These tests pin
+    // the wiring contract: post-move log state mirrors the library state.
+
+    func testMove_success_pairsWithRecordMove_andUndoRestoresToSource() async throws {
+        let ops = MoveFlowMockAlbumOperations()
+        let log = DecisionLog(operations: ops)
+        let asset = AssignmentDecisionFixtures.makePHAsset()
+
+        let outcome = await AlbumMover.move(
+            asset,
+            from: (id: sourceID, title: sourceTitle),
+            to: (id: targetID, title: targetTitle),
+            via: ops
+        )
+        // Simulate `AlbumDetailView.move`'s post-success recording.
+        if case .moved = outcome {
+            log.recordMove(
+                asset: asset,
+                sourceAlbumID: sourceID, sourceAlbumName: sourceTitle,
+                targetAlbumID: targetID, targetAlbumName: targetTitle
+            )
+        }
+
+        XCTAssertTrue(log.canUndo, "F-15: a successful move must leave an undo entry")
+        XCTAssertEqual(log.undoEntries.count, 1)
+
+        // Now undo and assert the asset is restored to source.
+        ops.callSequence.removeAll()
+        await log.undo()
+
+        XCTAssertEqual(ops.callSequence, [
+            .assign(.byID, target: sourceID),
+            .remove(.byID, target: targetID),
+        ], "Undo of a move must re-add to source and remove from target — both via by-id")
+        XCTAssertEqual(log.lastUndoneAlbumName, sourceTitle,
+                       "Toast: 'restored to <source>'")
+    }
+
+    func testMove_assignFailed_doesNotRecordOnDecisionLog() async throws {
+        let ops = MoveFlowMockAlbumOperations()
+        ops.assignShouldSucceed = false
+        let log = DecisionLog(operations: ops)
+        let asset = AssignmentDecisionFixtures.makePHAsset()
+
+        let outcome = await AlbumMover.move(
+            asset,
+            from: (id: sourceID, title: sourceTitle),
+            to: (id: targetID, title: targetTitle),
+            via: ops
+        )
+        if case .moved = outcome {
+            XCTFail("Test setup error: outcome should be .assignFailed")
+        }
+
+        XCTAssertFalse(log.canUndo,
+                       "F-15: a failed move must not record — the library was never mutated")
+    }
+
+    func testMove_rolledBack_doesNotRecordOnDecisionLog() async throws {
+        let ops = MoveFlowMockAlbumOperations()
+        ops.removeByIDShouldFail = [sourceID]
+        let log = DecisionLog(operations: ops)
+        let asset = AssignmentDecisionFixtures.makePHAsset()
+
+        let outcome = await AlbumMover.move(
+            asset,
+            from: (id: sourceID, title: sourceTitle),
+            to: (id: targetID, title: targetTitle),
+            via: ops
+        )
+        if case .moved = outcome {
+            XCTFail("Test setup error: outcome should be .removeFailedRolledBack")
+        }
+
+        XCTAssertFalse(log.canUndo,
+                       "F-15: a rolled-back move leaves the library unchanged; no undo entry to record")
+    }
+
     func testMove_sourceEqualsTarget_assignNoOp_removeRemovesFromBoth() async throws {
         // Both sides addressed by the same id and title.
         let sameID = "PHCollection-Same"

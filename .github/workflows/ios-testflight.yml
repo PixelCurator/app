@@ -1,0 +1,512 @@
+# iOS TestFlight build + upload via GitHub Actions.
+#
+# Tag-triggered fallback for the Xcode Cloud "Release -> TestFlight External"
+# workflow while Apple's monthly Xcode Cloud compute quota is exhausted
+# (resets 2026-07-13). Guarded by the same ASC-API quota-out detector as
+# macos-testflight.yml so that, when Xcode Cloud is healthy again, this
+# workflow is a 30-second no-op and the native Xcode Cloud "Release ->
+# TestFlight External" path reasserts.
+#
+# Critical: this workflow exports the archive with method=app-store, which
+# yields buildAudienceType=APP_STORE_ELIGIBLE on TestFlight - the prerequisite
+# for External Beta App Review. Xcode Cloud Internal-CI uploads come back as
+# INTERNAL_ONLY and cannot be promoted via the API (ATTRIBUTE.NOT_ALLOWED).
+#
+# Required secrets (in addition to ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY):
+#   APPLE_DISTRIBUTION_CERT_BASE64      .p12 of "Apple Distribution" (works for iOS + macOS - unified cert)
+#   APPLE_DISTRIBUTION_CERT_PASSWORD    password for the .p12
+#   APPLE_IOS_PROVISIONING_PROFILE_BASE64
+#                                       base64 of the iOS App Store .mobileprovision
+#                                       (profile id K2LB32PL7V, created 2026-06-23 via ASC API)
+#   APPLE_KEYCHAIN_PASSWORD             any string - used to lock the temp keychain
+name: iOS TestFlight (smart hybrid)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEAM_ID: 6T5T32GRR3
+  BUNDLE_ID: yves.vogl.pixelcurator
+  SCHEME: PixelCurator
+
+jobs:
+  quota-check:
+    name: Detect Xcode Cloud quota state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      quota_out: ${{ steps.detect.outputs.quota_out }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - name: Resolve quota state from ASC API
+        id: detect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch - bypassing guard"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=manual-dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ] || [ -z "${ASC_PRIVATE_KEY:-}" ]; then
+            echo "ASC secrets missing - skip (Xcode Cloud is the primary path)"
+            echo "quota_out=false" >> "$GITHUB_OUTPUT"
+            echo "reason=secrets-missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          python3 - <<'PY' > /tmp/jwt.txt
+          import os, json, time, base64
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+          b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          key = serialization.load_pem_private_key(open('/tmp/asc.p8','rb').read(), password=None)
+          header = {"alg":"ES256","kid":os.environ['ASC_KEY_ID'],"typ":"JWT"}
+          payload = {"iss":os.environ['ASC_ISSUER_ID'],"exp":int(time.time())+600,"aud":"appstoreconnect-v1"}
+          si = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+          der = key.sign(si, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          print(si.decode() + '.' + b64u(r.to_bytes(32,'big') + s.to_bytes(32,'big')))
+          PY
+          JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
+
+          # Probe the "CI - main -> TestFlight Internal" workflow recent runs.
+          # When Xcode Cloud is quota-out, ALL workflows (including Release)
+          # show the CANCELED-with-null-cancelReason-and-null-startedDate
+          # signature - confirmed across main-CI and Release builds 2026-06-23.
+          MAIN_WORKFLOW="2116F53B-1ACE-49B9-B06F-0F5E394B1354"
+          for attempt in 1 2 3; do
+            HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$MAIN_WORKFLOW/buildRuns" \
+              -H "Authorization: Bearer $JWT" \
+              --data-urlencode "limit=10" \
+              --data-urlencode "sort=-number")
+            [ "$HTTP" = "200" ] && break
+            echo "ASC API: HTTP $HTTP on attempt $attempt - retrying"
+            sleep 5
+          done
+          if [ "$HTTP" != "200" ]; then
+            echo "ASC API never returned 200 - assume quota-out"
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=asc-api-unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BAD=$(python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/resp.json'))
+          bad = 0
+          for r in d.get('data', [])[:5]:
+              a = r['attributes']
+              if a.get('completionStatus') == 'CANCELED' and a.get('cancelReason') is None and a.get('startedDate') is None:
+                  bad += 1
+          print(bad)
+          PY
+          )
+          echo "Recent quota-out signatures: $BAD of last 5 main-CI runs"
+          if [ "$BAD" -ge 3 ]; then
+            echo "quota_out=true" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-quota-out" >> "$GITHUB_OUTPUT"
+          else
+            echo "quota_out=false" >> "$GITHUB_OUTPUT"
+            echo "reason=xcode-cloud-healthy" >> "$GITHUB_OUTPUT"
+          fi
+
+  signing-secrets-check:
+    name: Verify iOS signing secrets are present
+    needs: quota-check
+    if: needs.quota-check.outputs.quota_out == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      has_signing: ${{ steps.check.outputs.has_signing }}
+    steps:
+      - name: Check secrets
+        id: check
+        env:
+          DIST_CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+          PROFILE_B64: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          missing=0
+          for var in DIST_CERT_B64 CERT_PW PROFILE_B64 KEY_PW; do
+            if [ -z "${!var}" ]; then
+              echo "Missing: APPLE_* secret backing \$$var"
+              missing=1
+            fi
+          done
+          if [ $missing -eq 0 ]; then
+            echo "All 4 iOS signing secrets present"
+            echo "has_signing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_signing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-upload:
+    name: Build iOS archive & upload to TestFlight
+    needs: [quota-check, signing-secrets-check]
+    if: needs.signing-secrets-check.outputs.has_signing == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Resolve next build number from ASC API
+        id: build_number
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # Compute next CFBundleVersion as max(existing build versions across
+          # iOS + macOS for this app) + 1. Mirrors the ci_post_clone.sh pattern:
+          # Xcode Cloud uses CI_BUILD_NUMBER which is the autoincrement count on
+          # Apple's side. Here we replicate the autoincrement against the ASC
+          # API. Querying ALL builds (iOS + macOS) avoids version collisions
+          # against the macOS GHA fallback or any other future producer.
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          python3 - <<'PY' > /tmp/jwt.txt
+          import os, json, time, base64
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+          b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          key = serialization.load_pem_private_key(open('/tmp/asc.p8','rb').read(), password=None)
+          header = {"alg":"ES256","kid":os.environ['ASC_KEY_ID'],"typ":"JWT"}
+          payload = {"iss":os.environ['ASC_ISSUER_ID'],"exp":int(time.time())+600,"aud":"appstoreconnect-v1"}
+          si = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+          der = key.sign(si, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          print(si.decode() + '.' + b64u(r.to_bytes(32,'big') + s.to_bytes(32,'big')))
+          PY
+          JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
+
+          APP_ID=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/apps" \
+            -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[bundleId]=$BUNDLE_ID" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])")
+          echo "Resolved app id: $APP_ID"
+
+          MAX_VERSION=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/builds" \
+            -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[app]=$APP_ID" \
+            --data-urlencode "sort=-uploadedDate" \
+            --data-urlencode "limit=200" | \
+            python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          versions = []
+          for b in d.get('data', []):
+              v = b['attributes'].get('version')
+              if v is not None:
+                  try:
+                      versions.append(int(v))
+                  except ValueError:
+                      pass
+          print(max(versions) if versions else 0)
+          ")
+          NEXT=$((MAX_VERSION + 1))
+          echo "Highest existing build number: $MAX_VERSION -> next: $NEXT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve marketing version from tag
+        id: marketing_version
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF#refs/tags/}"
+          # workflow_dispatch on a non-tag ref - fall back to the committed
+          # MARKETING_VERSION so the verification path still produces a
+          # consistent IPA (just won't be a v-tag build).
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            COMMITTED=$(grep -E '^[[:space:]]+MARKETING_VERSION:' project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            echo "Non-tag dispatch - using committed MARKETING_VERSION=$COMMITTED"
+            echo "version=$COMMITTED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Strip leading v from semver tag (v0.1.0 -> 0.1.0).
+          VERSION="${REF#v}"
+          echo "Tag $REF -> MARKETING_VERSION=$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp project.yml version + build number
+        env:
+          NEXT_BUILD: ${{ steps.build_number.outputs.next }}
+          MARKETING_VERSION: ${{ steps.marketing_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Same sed pattern as ci_scripts/ci_post_clone.sh - stamps the
+          # project.yml BEFORE xcodegen runs, so the auto-generated Info.plist
+          # (GENERATE_INFOPLIST_FILE=YES) picks up the right values.
+          sed -i.bak -E "s/^([[:space:]]+CURRENT_PROJECT_VERSION:)[[:space:]].*/\1 \"$NEXT_BUILD\"/" project.yml
+          sed -i.bak -E "s/^([[:space:]]+MARKETING_VERSION:)[[:space:]].*/\1 \"$MARKETING_VERSION\"/" project.yml
+          rm -f project.yml.bak
+          echo "Stamped:"
+          grep -E '^[[:space:]]+(CURRENT_PROJECT_VERSION|MARKETING_VERSION):' project.yml
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Import signing identity into temp keychain
+        env:
+          DIST_CERT_B64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+          KEY_PW: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$KEY_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEY_PW" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | xargs)
+
+          # Apple Distribution cert - the unified iOS+macOS distribution cert.
+          # iOS App Store uploads only need this one cert; the macOS installer
+          # cert is macOS-pkg-only and not needed for the iOS .ipa path.
+          DIST_PATH="$RUNNER_TEMP/dist.p12"
+          printf '%s' "$DIST_CERT_B64" | base64 -d > "$DIST_PATH"
+          security import "$DIST_PATH" -P "$CERT_PW" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm "$DIST_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEY_PW" "$KEYCHAIN_PATH"
+
+          echo "Code signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Install iOS App Store provisioning profile
+        env:
+          PROFILE_B64: ${{ secrets.APPLE_IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          PROFILES_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          # iOS profiles use .mobileprovision (vs .provisionprofile for macOS).
+          PROFILE_PATH="$PROFILES_DIR/pixelcurator-ios.mobileprovision"
+          printf '%s' "$PROFILE_B64" | base64 -d > "$PROFILE_PATH"
+          # Decode to a tempfile first - piping the plist via /dev/stdin into
+          # PlistBuddy is unreliable (Cannot parse NULL or zero-length data).
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$PROFILE_PATH" -o "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$PROFILE_PLIST")
+          # Derive DEVELOPMENT_TEAM from the profile so cert/profile/team stay
+          # internally consistent regardless of what project.yml DEVELOPMENT_TEAM
+          # claims (project.yml has 6T5T32GRR3, ASC API key issues into M5WT732AY5).
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$PROFILE_PLIST")
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_TEAM=$PROFILE_TEAM" >> "$GITHUB_ENV"
+          echo "Installed iOS profile UUID: $PROFILE_UUID, team: $PROFILE_TEAM"
+
+      - name: Archive iOS app
+        run: |
+          set -o pipefail
+          # DEVELOPMENT_TEAM comes from the provisioning profile rather than
+          # the workflow env, so the cert/profile/team triple is always
+          # internally consistent. CODE_SIGN_IDENTITY uses the full common
+          # name so Xcode finds the right cert deterministically.
+          xcodebuild archive \
+            -project PixelCurator.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/PixelCurator-iOS.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution: Yves Vogl" \
+            DEVELOPMENT_TEAM="$PROFILE_TEAM" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID"
+
+      - name: Write export options plist
+        run: |
+          # method=app-store is the critical knob: this is what tells
+          # ASC the resulting build is APP_STORE_ELIGIBLE (eligible for
+          # External Beta App Review). The Xcode Cloud Internal workflow
+          # uses a different export path that yields INTERNAL_ONLY, which
+          # cannot be promoted later (ASC API PATCH on buildAudienceType
+          # returns ATTRIBUTE.NOT_ALLOWED).
+          # signingCertificate pins the cert xcodebuild uses for the .app
+          # so a stale identity from a system keychain can't win selection.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>teamID</key>
+            <string>$PROFILE_TEAM</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROFILE_UUID</string>
+            </dict>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          cat "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Export .ipa
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/PixelCurator-iOS.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          ls -la "$RUNNER_TEMP/export/"
+
+      - name: Upload to TestFlight via altool
+        # Tag-only gate: workflow_dispatch on a non-tag ref still archives and
+        # exports (so signing wiring can be verified end-to-end) but skips the
+        # upload step. This keeps PR-style verification runs from polluting
+        # TestFlight with throwaway builds.
+        if: github.ref_type == 'tag'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # altool reads the .p8 from ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$ASC_PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+          IPA=$(ls "$RUNNER_TEMP/export"/*.ipa | head -1)
+          echo "Uploading: $IPA"
+          xcrun altool --upload-app -t ios -f "$IPA" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Poll ASC for build processing state
+        if: github.ref_type == 'tag'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          EXPECTED_BUILD: ${{ steps.build_number.outputs.next }}
+        run: |
+          set -euo pipefail
+          # Apple typically takes 5-15 minutes to process a TestFlight build
+          # from "uploaded" -> "VALID". We poll every 30s for up to 25 minutes.
+          # If we never see VALID, we surface the last-known state in the log
+          # and exit non-zero so the workflow run flags clearly.
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          mint_jwt() {
+            python3 - <<'PY'
+          import os, json, time, base64
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+          b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          key = serialization.load_pem_private_key(open('/tmp/asc.p8','rb').read(), password=None)
+          header = {"alg":"ES256","kid":os.environ['ASC_KEY_ID'],"typ":"JWT"}
+          payload = {"iss":os.environ['ASC_ISSUER_ID'],"exp":int(time.time())+1200,"aud":"appstoreconnect-v1"}
+          si = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+          der = key.sign(si, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          print(si.decode() + '.' + b64u(r.to_bytes(32,'big') + s.to_bytes(32,'big')))
+          PY
+          }
+          JWT=$(mint_jwt)
+          APP_ID=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/apps" \
+            -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[bundleId]=$BUNDLE_ID" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])")
+
+          LAST_STATE="unknown"
+          LAST_AUDIENCE="unknown"
+          for i in $(seq 1 50); do
+            RESP=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/builds" \
+              -H "Authorization: Bearer $JWT" \
+              --data-urlencode "filter[app]=$APP_ID" \
+              --data-urlencode "filter[version]=$EXPECTED_BUILD" \
+              --data-urlencode "limit=5")
+            LAST_STATE=$(printf '%s' "$RESP" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          for b in d.get('data',[]):
+              print(b['attributes'].get('processingState'))
+              break
+          else:
+              print('not-yet-visible')
+          ")
+            LAST_AUDIENCE=$(printf '%s' "$RESP" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          for b in d.get('data',[]):
+              print(b['attributes'].get('buildAudienceType'))
+              break
+          else:
+              print('-')
+          ")
+            echo "[poll $i] build $EXPECTED_BUILD: state=$LAST_STATE audience=$LAST_AUDIENCE"
+            if [ "$LAST_STATE" = "VALID" ]; then
+              if [ "$LAST_AUDIENCE" = "APP_STORE_ELIGIBLE" ]; then
+                echo "Build $EXPECTED_BUILD is VALID + APP_STORE_ELIGIBLE - eligible for External Beta App Review."
+                rm -f /tmp/asc.p8
+                exit 0
+              else
+                echo "ERROR: build $EXPECTED_BUILD VALID but audience=$LAST_AUDIENCE (expected APP_STORE_ELIGIBLE)."
+                echo "Likely cause: ExportOptions.plist method != 'app-store'."
+                rm -f /tmp/asc.p8
+                exit 1
+              fi
+            fi
+            if [ "$LAST_STATE" = "INVALID" ] || [ "$LAST_STATE" = "FAILED" ]; then
+              echo "ERROR: build $EXPECTED_BUILD reached $LAST_STATE."
+              rm -f /tmp/asc.p8
+              exit 1
+            fi
+            sleep 30
+            # Refresh JWT every 20 minutes to stay well under 20-minute Apple cap.
+            if [ $((i % 40)) -eq 0 ]; then
+              JWT=$(mint_jwt)
+            fi
+          done
+          echo "Timed out waiting for build $EXPECTED_BUILD to reach VALID (last: $LAST_STATE / $LAST_AUDIENCE)."
+          rm -f /tmp/asc.p8
+          exit 1
+
+      - name: Upload xcarchive as artifact
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: PixelCurator-iOS-xcarchive
+          path: ${{ runner.temp }}/PixelCurator-iOS.xcarchive
+          if-no-files-found: warn
+          retention-days: 7

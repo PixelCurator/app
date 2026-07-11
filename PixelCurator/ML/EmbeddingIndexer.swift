@@ -111,8 +111,19 @@ final class EmbeddingIndexer {
         // instead of starting a second one in parallel — `currentTask` is
         // serializable but two concurrent runs would race the `indexed` /
         // `total` counters.
+        //
+        // F-07: previously this returned after awaiting the in-flight task,
+        // which silently dropped any newly-added assets in `assets` that
+        // weren't part of the original `pending` set. If the user added
+        // photos to Photos.app while indexing was already running, those new
+        // photos waited for the next library-change tick to be embedded.
+        // Now: after the in-flight run completes, recurse with the current
+        // `assets` so the skip-set logic in `runIndex` picks up exactly the
+        // delta and re-embeds nothing. The skip-set fetch is cheap
+        // (`embeddedAssetIDs` already returns O(rows-in-variant)).
         if let inFlight = currentTask, !inFlight.isCancelled, isIndexing {
             await inFlight.value
+            await index(assets: assets)
             return
         }
         let task = Task { [weak self] in
@@ -160,8 +171,26 @@ final class EmbeddingIndexer {
         // macOS 26 — see N-7 in the backlog. The closure indirection keeps
         // production behaviour unchanged while letting tests bypass the trap.
         let alreadyIndexed = alreadyIndexedAssetIDs(variant.modelID)
-        let pending = assets.filter { !alreadyIndexed.contains($0.localIdentifier) }
         let store = EmbeddingStore(context: context)
+
+        // F-22: load the persisted unindexable set for this variant. The
+        // skip predicate is "either embedded already" OR "previously failed
+        // and the PHAsset's modificationDate has not advanced past the
+        // recorded one". A `nil` recorded `modificationDate` requires the
+        // asset to now have a non-nil date to re-trigger.
+        let unindexable = store.unindexableRecords(modelID: variant.modelID)
+        let pending = assets.filter { asset in
+            if alreadyIndexed.contains(asset.localIdentifier) {
+                return false
+            }
+            if let record = unindexable[asset.localIdentifier] {
+                return Self.shouldRetryUnindexable(
+                    record: record,
+                    currentModificationDate: asset.modificationDate
+                )
+            }
+            return true
+        }
 
         total = pending.count
         indexed = 0
@@ -171,7 +200,15 @@ final class EmbeddingIndexer {
             if _cancelRequested || Task.isCancelled { break }
 
             guard let cgImage = await cgImageProvider.cgImage(for: asset) else {
-                print("EmbeddingIndexer: could not fetch CGImage for \(asset.localIdentifier), skipping")
+                // F-22: record the failure so the next run's `pending` filter
+                // skips this asset until its modificationDate advances. We
+                // also avoid the print noise that previously fired on every
+                // library-change tick for the same dead assets.
+                store.markUnindexable(
+                    assetID: asset.localIdentifier,
+                    modelID: variant.modelID,
+                    modificationDate: asset.modificationDate
+                )
                 continue
             }
 
@@ -183,6 +220,13 @@ final class EmbeddingIndexer {
                     vector: vector,
                     assetModificationDate: asset.modificationDate
                 )
+                // Successful re-attempt clears the prior failure record.
+                if unindexable[asset.localIdentifier] != nil {
+                    store.clearUnindexable(
+                        assetID: asset.localIdentifier,
+                        modelID: variant.modelID
+                    )
+                }
                 indexed += 1
 
                 if indexed % 20 == 0 {
@@ -195,6 +239,31 @@ final class EmbeddingIndexer {
 
         try? context.save()
         isIndexing = false
+    }
+
+    /// Retry predicate for the F-22 unindexable cache. Returns `true` when
+    /// the asset's current `modificationDate` is strictly later than the
+    /// recorded one, indicating user activity in Photos.app (re-upload,
+    /// edit, finished iCloud download).
+    ///
+    /// Edge cases:
+    /// - Recorded `nil`, current non-nil → retry (asset acquired metadata).
+    /// - Recorded non-nil, current `nil` → no retry (regression suggests
+    ///   the asset is being mid-mutated; wait for stability).
+    /// - Both `nil` → no retry (nothing has changed).
+    /// - Both non-nil, current ≤ recorded → no retry.
+    static func shouldRetryUnindexable(
+        record: UnindexableAsset,
+        currentModificationDate: Date?
+    ) -> Bool {
+        switch (record.modificationDate, currentModificationDate) {
+        case (nil, .some):
+            return true
+        case (.some(let recorded), .some(let current)):
+            return current > recorded
+        default:
+            return false
+        }
     }
 
 }

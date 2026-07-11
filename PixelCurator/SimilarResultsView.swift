@@ -20,10 +20,17 @@ struct SimilarResultsView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var results: [PHAsset] = []
-    @State private var hasSearched = false
+    /// F-09. Stores the typed query outcome so the empty-state branch can
+    /// pick precise copy. `nil` means "no query has completed yet"
+    /// (search may or may not be in flight).
+    @State private var result: SimilarSearchResult?
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 2)]
+
+    /// Convenience for the result-grid branch — true iff a query has
+    /// returned (any case). Animations key off this so the loading→empty
+    /// transition still fades.
+    private var hasSearched: Bool { result != nil }
 
     // MARK: - Body
 
@@ -51,8 +58,7 @@ struct SimilarResultsView: View {
                 }
             }
             .task {
-                results = await search.similarAssets(to: queryAsset.localIdentifier)
-                hasSearched = true
+                result = await search.similarAssets(to: queryAsset.localIdentifier)
             }
         }
     }
@@ -83,29 +89,65 @@ struct SimilarResultsView: View {
                 .controlSize(.large)
                 .padding(.top, 40)
                 .transition(.opacity)
-        } else if hasSearched && results.isEmpty {
-            emptyState
-                .transition(.opacity)
-        } else {
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(results, id: \.localIdentifier) { asset in
-                    SimilarThumbnailCell(asset: asset)
-                        .aspectRatio(1, contentMode: .fill)
-                        .clipped()
-                        .contentShape(Rectangle())
+        } else if let result {
+            switch result {
+            case .results(let assets):
+                LazyVGrid(columns: columns, spacing: 2) {
+                    ForEach(assets, id: \.localIdentifier) { asset in
+                        SimilarThumbnailCell(asset: asset)
+                            .aspectRatio(1, contentMode: .fill)
+                            .clipped()
+                            .contentShape(Rectangle())
+                    }
                 }
+                .padding(2)
+                .transition(.opacity)
+            case .notAvailable:
+                notAvailableState.transition(.opacity)
+            case .notIndexedYet:
+                notIndexedYetState.transition(.opacity)
+            case .empty:
+                emptyState.transition(.opacity)
             }
-            .padding(2)
-            .transition(.opacity)
         }
     }
 
-    private var emptyState: some View {
+    /// F-09. iCloud-only (or otherwise pixel-unavailable) query asset.
+    /// Distinct from `.empty` and `.notIndexedYet` because the user has a
+    /// concrete remediation: pull the original onto the device via
+    /// Photos.app.
+    private var notAvailableState: some View {
+        ContentUnavailableView(
+            "Photo not available on device",
+            systemImage: "icloud.slash",
+            description: Text("Open this photo in Photos.app to download the original from iCloud, then try again.")
+        )
+        .accessibilityIdentifier("similar-results-not-available")
+    }
+
+    /// F-09. Query asset hasn't been indexed yet and the on-the-fly embed
+    /// path also didn't produce a vector — indexing is most likely still
+    /// running. Same copy as the pre-F-09 generic empty state, narrowed
+    /// to the case where it's actually correct.
+    private var notIndexedYetState: some View {
         ContentUnavailableView(
             "No Similar Photos",
             systemImage: "photo.on.rectangle.angled",
             description: Text("Indexing may still be running. Try again once the progress indicator disappears.")
         )
+        .accessibilityIdentifier("similar-results-not-indexed-yet")
+    }
+
+    /// F-09. Index is complete and was searched — the library genuinely
+    /// has no other photos to compare against (or no other matches
+    /// survived ranking). Hides the misleading "still indexing" hint.
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "No Similar Photos",
+            systemImage: "photo.on.rectangle.angled",
+            description: Text("No similar photos in this library.")
+        )
+        .accessibilityIdentifier("similar-results-empty")
     }
 }
 

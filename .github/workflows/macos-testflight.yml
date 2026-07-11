@@ -1,13 +1,20 @@
 # macOS TestFlight build + upload via GitHub Actions.
 #
-# Runs on push to main (and via workflow_dispatch), guarded by the same
-# Xcode Cloud quota-out detector as pr-fallback-ci.yml. When Xcode Cloud is
-# healthy, this is a 30-second no-op. When Xcode Cloud is quota-out, it:
-#   1. Imports the Apple Distribution cert + macOS App Store profile from
-#      GitHub Secrets into a temporary keychain
-#   2. Builds & archives the macOS app (xcodebuild archive)
-#   3. Exports the .pkg with method=app-store-connect
-#   4. Uploads to TestFlight via xcrun altool with the ASC API key
+# Tag-triggered fallback for the Xcode Cloud "Release -> TestFlight External"
+# workflow while Apple's monthly Xcode Cloud compute quota is exhausted
+# (resets 2026-07-13). Guarded by the same ASC-API quota-out detector as
+# ios-testflight.yml so that, when Xcode Cloud is healthy again, this
+# workflow is a 30-second no-op and the native Xcode Cloud "Release ->
+# TestFlight External" path reasserts.
+#
+# Critical: this workflow exports the archive with method=app-store, which
+# yields buildAudienceType=APP_STORE_ELIGIBLE on TestFlight - the prerequisite
+# for External Beta App Review. APP_STORE_ELIGIBLE covers BOTH internal AND
+# external distribution audiences, so one tag-push build serves Yves
+# (Internal Tester) immediately and external testers after Apple Beta App
+# Review approval. The Internal-only build path on main-push is retired
+# (Xcode Cloud "CI - main (tests)" no longer archives - see
+# update_main_workflow_tests_only.rb in PixelCurator-strategy).
 #
 # Required secrets (in addition to ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY):
 #   APPLE_DISTRIBUTION_CERT_BASE64      .p12 of "Apple Distribution" — signs the .app
@@ -20,7 +27,8 @@ name: macOS TestFlight (smart hybrid)
 
 on:
   push:
-    branches: [ main ]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -81,12 +89,15 @@ jobs:
           PY
           JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
 
-          # macOS workflow is in the same Xcode Cloud workflow as iOS — checks
-          # the "CI - main → TestFlight Internal" workflow's recent runs.
-          MAIN_WORKFLOW="2116F53B-1ACE-49B9-B06F-0F5E394B1354"
+          # Probe the Xcode Cloud "Release -> TestFlight External" workflow's
+          # recent runs (this GHA workflow now mirrors that one — tag-only,
+          # APP_STORE_ELIGIBLE). When Xcode Cloud is quota-out, ALL workflows
+          # (including Release) show the CANCELED-with-null-cancelReason-and-
+          # null-startedDate signature - confirmed 2026-06-23.
+          RELEASE_WORKFLOW="6bb83629-1aab-4bcf-930e-4be4366b49f3"
           for attempt in 1 2 3; do
             HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
-              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$MAIN_WORKFLOW/buildRuns" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$RELEASE_WORKFLOW/buildRuns" \
               -H "Authorization: Bearer $JWT" \
               --data-urlencode "limit=10" \
               --data-urlencode "sort=-number")
@@ -111,7 +122,7 @@ jobs:
           print(bad)
           PY
           )
-          echo "Recent quota-out signatures: $BAD of last 5 main-CI runs"
+          echo "Recent quota-out signatures: $BAD of last 5 Release-workflow runs"
           if [ "$BAD" -ge 3 ]; then
             echo "quota_out=true" >> "$GITHUB_OUTPUT"
             echo "reason=xcode-cloud-quota-out" >> "$GITHUB_OUTPUT"
@@ -252,19 +263,27 @@ jobs:
 
       - name: Write export options plist
         run: |
-          # signingCertificate pins the cert xcodebuild uses to sign the .app
-          # itself. Without it the temp keychain holds two candidates (Apple
-          # Distribution + 3rd Party Mac Developer Installer) and xcodebuild
-          # picked the installer cert — which can't sign code, fails with
-          # "this identity cannot be used for signing code". The installer
-          # cert is still picked up implicitly for the .pkg wrapper.
+          # method=app-store is the critical knob: this is what tells
+          # ASC the resulting build is APP_STORE_ELIGIBLE (eligible for
+          # both Internal Testing distribution AND External Beta App
+          # Review). The previous main-push path used a different
+          # internal-only export yielding INTERNAL_ONLY, which cannot
+          # be promoted later (ASC API PATCH on buildAudienceType
+          # returns ATTRIBUTE.NOT_ALLOWED). Matches the iOS twin.
+          # signingCertificate pins the cert xcodebuild uses to sign
+          # the .app itself. Without it the temp keychain holds two
+          # candidates (Apple Distribution + 3rd Party Mac Developer
+          # Installer) and xcodebuild picked the installer cert —
+          # which can't sign code, fails with "this identity cannot
+          # be used for signing code". The installer cert is still
+          # picked up implicitly for the .pkg wrapper.
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>app-store-connect</string>
+            <string>app-store</string>
             <key>destination</key>
             <string>export</string>
             <key>teamID</key>
@@ -295,6 +314,11 @@ jobs:
           ls -la "$RUNNER_TEMP/export/"
 
       - name: Upload to TestFlight via altool
+        # Tag-only gate: workflow_dispatch on a non-tag ref still archives and
+        # exports (so signing wiring can be verified end-to-end) but skips the
+        # upload step. This keeps PR-style verification runs from polluting
+        # TestFlight with throwaway builds.
+        if: github.ref_type == 'tag'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}

@@ -30,6 +30,16 @@ final class IndexingETAEstimator {
         self.minSamples = minSamples
     }
 
+    /// Timestamp of the most recent tick, or `nil` if no tick has been
+    /// recorded since the last `reset()`. Used by `IndexingLockOverlay` to
+    /// detect a long backgrounding gap (iOS suspends the process after the
+    /// background-task budget expires) and surface a "paused while away —
+    /// resuming…" hint on re-foreground. Additive read-only accessor — does
+    /// not change any ETA-calculation behaviour.
+    var lastTickAt: Date? {
+        ticks.last
+    }
+
     /// Discards all recorded ticks, e.g. when a new indexing run starts.
     func reset() {
         ticks.removeAll(keepingCapacity: true)

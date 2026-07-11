@@ -40,6 +40,13 @@ struct IndexingLockOverlay: View {
     @State private var lastAnnounced: Int = -1
     @State private var iconScale: Double = 1.0
 
+    /// B-4 / F-14. Defense-in-depth complement to the honest copy: if iOS
+    /// suspended the process while the user was away (longer than the
+    /// `beginBackgroundTask(...)` budget allowed), we briefly show a
+    /// "resuming…" hint when the overlay reappears so the user understands
+    /// why progress sat still. Threshold > 10 s of inter-tick gap.
+    @State private var showResumeNote: Bool = false
+
     // MARK: - Environment
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -61,10 +68,43 @@ struct IndexingLockOverlay: View {
                 .accessibilityIdentifier("indexing-lock-overlay")
         }
         .onAppear {
-            eta.reset()
+            // B-4. Detect a long backgrounding gap. If the overlay is being
+            // re-shown after iOS suspended us — i.e. the prior tick is older
+            // than the gap threshold — surface a transient "paused while
+            // away — resuming…" note + VoiceOver announcement so the user
+            // understands the silent stretch. We do NOT reset the ETA in
+            // that case: the existing rolling-window estimator self-corrects
+            // once new ticks arrive. We only reset on a fresh run (no prior
+            // ticks at all).
+            let now = Date()
+            let resumed: Bool
+            if let lastTick = eta.lastTickAt, now.timeIntervalSince(lastTick) > 10 {
+                resumed = true
+            } else {
+                resumed = false
+                eta.reset()
+            }
+
             lastAnnounced = -1
             if !reduceMotion { startPulse() }
             announceOverlayPresented()
+
+            if resumed {
+                showResumeNote = true
+                if voiceOverActive {
+                    AccessibilityNotification.Announcement(
+                        String(localized: "Indexing paused while away — resuming…")
+                    ).post()
+                }
+                // Auto-hide the inline note after a few seconds; the live
+                // counter and progress bar already convey ongoing state.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(4))
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                        showResumeNote = false
+                    }
+                }
+            }
         }
         // Tick the ETA estimator on every successfully indexed asset.
         .onChange(of: indexer.indexed) { _, newValue in
@@ -166,11 +206,30 @@ struct IndexingLockOverlay: View {
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.updatesFrequently)
 
-            // Subtitle
-            Text("Keep PixelCurator open. You can switch apps briefly — we'll keep working in the background for a few minutes.")
+            // Subtitle. B-4 / F-14: the previous copy promised "a few
+            // minutes" of background time, which iOS does not guarantee
+            // (`beginBackgroundTask(...)` is best-effort, typically ~30 s).
+            // Honest framing now: if the user switches apps, indexing pauses
+            // — and resumes on re-foreground.
+            Text("Keep PixelCurator open. Indexing pauses if you switch apps.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
+
+            // B-4 / F-14 resume note. Only visible when the overlay reappears
+            // after a long suspension gap; auto-hides after a few seconds.
+            if showResumeNote {
+                Text("Indexing paused while away — resuming…")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .accessibilityAddTraits(.updatesFrequently)
+                    .accessibilityIdentifier("indexing-resume-note")
+            }
         }
         .padding(28)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))

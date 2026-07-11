@@ -1,4 +1,5 @@
 import XCTest
+import Photos
 import SwiftData
 @testable import PixelCurator
 
@@ -161,6 +162,121 @@ final class SimilaritySearchTests: XCTestCase {
         XCTAssertEqual(results.count, 2)
 
         _ = container
+    }
+
+    // MARK: - F-09 typed result + iCloud-only short-circuit
+
+    /// Query asset has no stored embedding AND is iCloud-only → the search
+    /// must return `.notAvailable` so the view can render the
+    /// "Photo not available on device" copy instead of the misleading
+    /// "Indexing may still be running" generic empty state.
+    @MainActor
+    func testSimilarAssets_returnsNotAvailable_whenQueryIsCloudOnly() async throws {
+        let container = try ModelContainer(
+            for: PhotoEmbedding.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        // No embeddings seeded for the query asset — forces the on-the-fly
+        // path, which is where the iCloud-only short-circuit lives.
+
+        let library = PhotoController()
+        let stub = StubPHAsset(localIdentifier: "asset-cloud-only")
+        library.assets = [stub]
+        library.cloudOnlyAssetIDs = ["asset-cloud-only"]
+
+        let search = SimilaritySearch(
+            embedderForTesting: nil,
+            context: container.mainContext,
+            library: library,
+            variant: .bundledDefault,
+            assetResolver: { id in
+                id == "asset-cloud-only" ? stub : nil
+            }
+        )
+
+        let result = await search.similarAssets(to: "asset-cloud-only")
+
+        XCTAssertEqual(result, .notAvailable,
+                       "iCloud-only query must short-circuit to .notAvailable before " +
+                       "the embedder/cgImage path runs")
+    }
+
+    /// Query asset has no stored embedding AND the asset resolver can't
+    /// find it at all → `.notAvailable` (same case as a deleted/missing
+    /// asset, so the iCloud-only copy still applies — the user has no
+    /// remediation other than to step away).
+    @MainActor
+    func testSimilarAssets_returnsNotAvailable_whenAssetMissing() async throws {
+        let container = try ModelContainer(
+            for: PhotoEmbedding.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+
+        let library = PhotoController()
+
+        let search = SimilaritySearch(
+            embedderForTesting: nil,
+            context: container.mainContext,
+            library: library,
+            variant: .bundledDefault,
+            assetResolver: { _ in nil }
+        )
+
+        let result = await search.similarAssets(to: "asset-gone")
+
+        XCTAssertEqual(result, .notAvailable,
+                       "Missing asset resolves the same way as iCloud-only: " +
+                       "no pixels available to embed")
+    }
+
+    /// Index is complete, query is indexed, but there are no other
+    /// candidates → `.empty`. Distinct from `.notIndexedYet` so the view
+    /// can drop the "still indexing" hint when it is not true.
+    @MainActor
+    func testSimilarAssets_returnsEmpty_whenStoreHasOnlyTheQueryEmbedding() async throws {
+        let container = try ModelContainer(
+            for: PhotoEmbedding.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let store = EmbeddingStore(context: container.mainContext)
+        // Only the query asset is indexed.
+        store.upsert(
+            assetID: "only-me",
+            modelID: CLIPVariant.bundledDefault.modelID,
+            vector: Similarity.normalize([1.0, 0.0]),
+            assetModificationDate: nil
+        )
+
+        let library = PhotoController()
+        let stub = StubPHAsset(localIdentifier: "only-me")
+
+        let search = SimilaritySearch(
+            embedderForTesting: nil,
+            context: container.mainContext,
+            library: library,
+            variant: .bundledDefault,
+            assetResolver: { id in id == "only-me" ? stub : nil }
+        )
+
+        let result = await search.similarAssets(to: "only-me")
+
+        XCTAssertEqual(result, .empty,
+                       "Indexed query with no other candidates must return .empty " +
+                       "(not .notIndexedYet — the index IS complete for this asset)")
+    }
+
+    // MARK: - SimilarSearchResult Equatable contract
+
+    func testSimilarSearchResult_equatable_distinguishesCases() {
+        let a = StubPHAsset(localIdentifier: "a")
+        XCTAssertEqual(SimilarSearchResult.notAvailable, .notAvailable)
+        XCTAssertEqual(SimilarSearchResult.notIndexedYet, .notIndexedYet)
+        XCTAssertEqual(SimilarSearchResult.empty, .empty)
+        XCTAssertEqual(SimilarSearchResult.results([a]), .results([a]))
+
+        XCTAssertNotEqual(SimilarSearchResult.notAvailable, .notIndexedYet)
+        XCTAssertNotEqual(SimilarSearchResult.empty, .notAvailable)
+        XCTAssertNotEqual(SimilarSearchResult.results([]), .empty)
     }
 
     /// Scores from `cosineTopK` on L2-normalised vectors must lie in [-1, 1].

@@ -44,7 +44,7 @@ struct SortingInboxView: View {
     // MARK: - Local UI state
 
     @State private var showAlbumPicker = false
-    @State private var toast: String?
+    @State private var toast: ToastMessage?
     @State private var heroImage: PlatformImage?
     @State private var lastLoadedID: String?
 
@@ -63,6 +63,11 @@ struct SortingInboxView: View {
     @State private var showNewAlbumSheet = false
     @State private var newAlbumName: String = ""
     @State private var pendingNewAlbumAction: ((String) -> Void)?
+
+    /// F-12. Same install-wide gate read by `PhotoGridView`. The two views
+    /// both observe the `pixelCuratorFirstDecisionRecorded` notification;
+    /// the first to handle it flips the storage so the other becomes a no-op.
+    @AppStorage("hasShownUndoSessionHint") private var hasShownUndoSessionHint: Bool = false
 
     // MARK: - Body
 
@@ -256,7 +261,7 @@ struct SortingInboxView: View {
                         let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
                         selectedIDs.removeAll()
                         isSelecting = false
-                        await showToast("Added \(n) to \(chosenTitle)")
+                        await showToast(.localized("Added \(n) to \(chosenTitle)"))
                     }
                 }
             }
@@ -267,7 +272,7 @@ struct SortingInboxView: View {
                         let n = await coordinator.batchAssign(assets, toAlbumNamed: chosenTitle)
                         selectedIDs.removeAll()
                         isSelecting = false
-                        await showToast("Added \(n) to \(chosenTitle)")
+                        await showToast(.localized("Added \(n) to \(chosenTitle)"))
                     }
                 }
             }
@@ -340,7 +345,7 @@ struct SortingInboxView: View {
                 Button(album.title) {
                     Task {
                         await coordinator.assignTo(albumNamed: album.title)
-                        await showToast("Added to \(album.title)")
+                        await showToast(.localized("Added to \(album.title)"))
                     }
                 }
             }
@@ -348,7 +353,7 @@ struct SortingInboxView: View {
                 presentNewAlbumSheet { chosenTitle in
                     Task {
                         await coordinator.assignTo(albumNamed: chosenTitle)
-                        await showToast("Added to \(chosenTitle)")
+                        await showToast(.localized("Added to \(chosenTitle)"))
                     }
                 }
             }
@@ -357,36 +362,45 @@ struct SortingInboxView: View {
         // React to assign errors
         .onChange(of: coordinator.lastAssignError) { _, error in
             if let error {
-                Task { await showToast(error) }
+                Task { await showToast(.verbatim(error)) }
             }
         }
         // Undo feedback
         .onChange(of: coordinator.decisionLog.lastUndoneAlbumName) { _, name in
             if let name {
-                Task { await showToast("Removed from \(name)") }
+                Task { await showToast(.localized("Removed from \(name)")) }
             }
         }
         // Redo feedback
         .onChange(of: coordinator.decisionLog.lastRedoneAlbumName) { _, name in
             if let name {
-                Task { await showToast("Re-added to \(name)") }
+                Task { await showToast(.localized("Re-added to \(name)")) }
             }
         }
         // Undo failure feedback — without this, a remove-side failure leaves
         // the user staring at an unchanged screen with no idea why.
         .onChange(of: coordinator.decisionLog.lastUndoError) { _, error in
             if let error {
-                Task { await showToast(error) }
+                Task { await showToast(.verbatim(error)) }
             }
         }
         .onChange(of: coordinator.decisionLog.lastRedoError) { _, error in
             if let error {
-                Task { await showToast(error) }
+                Task { await showToast(.verbatim(error)) }
             }
         }
         // Load hero image whenever current changes
         .task(id: coordinator.current?.localIdentifier) {
             await loadHeroImage()
+        }
+        // F-12. Session-only Undo hint — same handler as PhotoGridView; the
+        // @AppStorage gate makes whichever view fires first the winner.
+        .onReceive(NotificationCenter.default.publisher(
+            for: .pixelCuratorFirstDecisionRecorded
+        )) { _ in
+            guard !hasShownUndoSessionHint else { return }
+            hasShownUndoSessionHint = true
+            Task { await showToast(.localized("Undo lasts only this session.")) }
         }
     }
 
@@ -452,7 +466,7 @@ struct SortingInboxView: View {
                     SuggestionChip(suggestion: suggestion) {
                         Task {
                             await coordinator.accept(suggestion)
-                            await showToast("Added to \(suggestion.albumTitle)")
+                            await showToast(.localized("Added to \(suggestion.albumTitle)"))
                         }
                     }
                     .transition(reduceMotion ? PCTransition.opacityOnly : PCTransition.scaleOpacity)
@@ -543,27 +557,40 @@ struct SortingInboxView: View {
     }
 
     @MainActor
-    private func showToast(_ message: String) async {
+    private func showToast(_ message: ToastMessage) async {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = message }
         // VoiceOver only hears the toast if we post it as an announcement;
         // the visible banner alone is not auto-announced because it appears
         // and disappears (UpdatesFrequently is for content the user has
         // already focused on).
-        VoiceOver.announce(message)
+        switch message {
+        case .localized(let resource):
+            VoiceOver.announce(resource)
+        case .verbatim(let string):
+            VoiceOver.announce(verbatim: string)
+        }
         try? await Task.sleep(for: .seconds(2.5))
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { toast = nil }
     }
 
     @ViewBuilder
-    private func toastBanner(_ message: String) -> some View {
-        Text(message)
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .padding(.bottom, 24)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .accessibilityAddTraits(.updatesFrequently)
-            .accessibilityLabel(message)
+    private func toastBanner(_ message: ToastMessage) -> some View {
+        Group {
+            switch message {
+            case .localized(let resource):
+                Text(resource)
+                    .accessibilityLabel(Text(resource))
+            case .verbatim(let string):
+                Text(verbatim: string)
+                    .accessibilityLabel(Text(verbatim: string))
+            }
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.bottom, 24)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }
 

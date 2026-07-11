@@ -32,14 +32,41 @@ struct PixelCuratorApp: App {
     /// The active CLIP variant. Changing this triggers variant-switch orchestration.
     @State private var activeVariant: CLIPVariant = .bundledDefault
 
-    /// Entitlement provider. `DebugEntitlementProvider` is the default so the full
-    /// multi-variant pipeline is testable without App Store Connect products.
+    /// Entitlement provider.
     ///
-    /// ⚠️  DEVELOPMENT DEFAULT — replace with `StoreKitEntitlementProvider` before release.
+    /// DEBUG builds use `DebugEntitlementProvider` so the full multi-variant
+    /// pipeline is exercisable without App Store Connect products.
+    ///
+    /// RELEASE builds use `BundledOnlyEntitlementProvider`: only the bundled
+    /// `.s0` variant is unlocked, Pro variants stay locked. This is the
+    /// safe-for-App-Review default until StoreKit + ASC IAP products are
+    /// configured — at which point this `#else` branch flips to
+    /// `StoreKitEntitlementProvider()`.
+    #if DEBUG
     @State private var entitlements: any EntitlementProvider = DebugEntitlementProvider()
+    #else
+    @State private var entitlements: any EntitlementProvider = BundledOnlyEntitlementProvider()
+    #endif
 
     /// Guards against concurrent variant-switch calls.
     @State private var isSwitchingVariant = false
+
+    /// B-6. Holds the boot-time error surfaced from `bootIndexer(variant:)`
+    /// so the root view can render an alert with a Retry affordance. The
+    /// previous catch block only `print`-logged, leaving the Sort tab in a
+    /// silent empty state when (e.g.) model compilation failed due to a
+    /// full disk or a corrupt model bundle. Identifiable so SwiftUI can key
+    /// the alert presentation on a stable id.
+    @State private var bootError: BootError?
+
+    /// F-02 mitigation. Holds the `pendingCascadeReplay` flag. Modeled as an
+    /// `@Observable` class rather than `@State Bool` so the cascade closure
+    /// (which is stored on `PhotoController` and outlives any single App body
+    /// evaluation) can read + write the flag through a `weak` capture without
+    /// reaching through a struct-typed `@State` projection. See
+    /// `installLibraryChangeCascade` for why the closure must not strongly
+    /// retain the App struct.
+    @State private var cascadeGate = CascadeGate()
 
     /// The single SwiftData container shared by the SwiftUI scene and every ML
     /// service (indexer, similarity search, sorting). Using one container —
@@ -52,7 +79,7 @@ struct PixelCuratorApp: App {
 
     init() {
         do {
-            modelContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self)
+            modelContainer = try ModelContainer(for: PhotoEmbedding.self, AlbumCorrection.self, UnindexableAsset.self)
         } catch {
             fatalError("PixelCurator: failed to create the shared ModelContainer: \(error)")
         }
@@ -72,6 +99,44 @@ struct PixelCuratorApp: App {
                 .environment(\.decisionLog, sharedDecisionLog)
                 .environment(\.isSwitchingVariant, isSwitchingVariant)
                 .task { await bootIndexer(variant: .bundledDefault) }
+                // B-6. Surface boot failures from `bootIndexer(variant:)`
+                // as an actionable alert. Without this the Sort tab silently
+                // shows the empty state forever (no indexer = no queue).
+                .alert(
+                    Text("Couldn't prepare indexer"),
+                    isPresented: Binding(
+                        get: { bootError != nil },
+                        set: { isPresented in
+                            if !isPresented { bootError = nil }
+                        }
+                    ),
+                    presenting: bootError
+                ) { error in
+                    Button("Try again") {
+                        let variant = error.variant
+                        bootError = nil
+                        Task { await bootIndexer(variant: variant) }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        bootError = nil
+                    }
+                } message: { _ in
+                    Text("Indexing isn't available right now. Try again — if the problem persists, restart PixelCurator.")
+                }
+                // F-02 trailing-edge replay. Whenever the cascade gate state
+                // changes (indexing flipped, variant switch settled), check
+                // whether a cascade was deferred and replay it now that the
+                // shared mainContext has no in-flight writer. The id captures
+                // both gates so either flip triggers the modifier re-run; the
+                // body itself re-checks both gates before running, so a flip
+                // that opens one gate while the other is still closed is a
+                // no-op (the deferred work waits for the second gate too).
+                .task(id: CascadeReplayKey(
+                    isIndexing: indexer?.isIndexing == true,
+                    isSwitchingVariant: isSwitchingVariant
+                )) {
+                    await replayCascadeIfPending()
+                }
                 // App-wide indexing lock: presented whenever the indexer is
                 // actively running. On iOS we use .fullScreenCover so it sits
                 // above sheets and navigation stacks; on macOS .fullScreenCover
@@ -122,11 +187,22 @@ struct PixelCuratorApp: App {
         // automatically. We re-inject the subset that `AppSettingsView` needs so
         // the Index Reset button is functional from the macOS Settings pane.
         Settings {
-            AppSettingsView()
-                .environment(library)
-                .environment(\.embeddingIndexer, indexer)
-                .environment(\.activeVariant, activeVariant)
-                .modelContainer(modelContainer)
+            // N-2. Wrap in NavigationStack so the new "Help & Tips" row in
+            // AppSettingsView pushes HelpView correctly on macOS. The iOS
+            // sheet path (in PhotoGridView) already wraps in its own
+            // NavigationStack, so AppSettingsView itself stays unwrapped.
+            NavigationStack {
+                AppSettingsView()
+                    .environment(library)
+                    .environment(\.embeddingIndexer, indexer)
+                    .environment(\.activeVariant, activeVariant)
+                    // F-13. Inject the variant-switch flag here too — the macOS
+                    // Settings scene does not inherit WindowGroup's environment,
+                    // and AppSettingsView's Delete Index button gate relies on
+                    // reading this value.
+                    .environment(\.isSwitchingVariant, isSwitchingVariant)
+                    .modelContainer(modelContainer)
+            }
         }
         #endif
     }
@@ -195,7 +271,23 @@ struct PixelCuratorApp: App {
         // Create the shared DecisionLog once (on first boot). Variant switches
         // don't need a fresh log — the same albums instance backs undo operations.
         if sharedDecisionLog == nil {
-            sharedDecisionLog = DecisionLog(operations: albums)
+            let log = DecisionLog(operations: albums)
+            // F-12. The DecisionLog fires `onFirstDecisionRecorded` exactly
+            // once per app launch, the moment the user records their first
+            // assignment or move. We rebroadcast as a Notification so any
+            // currently-visible view (PhotoGridView, SortingInboxView) can
+            // show the one-shot "Undo lasts only this session" toast through
+            // its existing `showToast` pipeline. The persistent across-launch
+            // gate (`@AppStorage("hasShownUndoSessionHint")`) lives at the
+            // call site so the DecisionLog itself stays free of UserDefaults
+            // coupling.
+            log.onFirstDecisionRecorded = {
+                NotificationCenter.default.post(
+                    name: .pixelCuratorFirstDecisionRecorded,
+                    object: nil
+                )
+            }
+            sharedDecisionLog = log
         }
 
         // Wire the library-change cascade once. The handler captures the
@@ -237,14 +329,14 @@ struct PixelCuratorApp: App {
             let newCorrectionStore = CorrectionStore(context: context)
             if let coordinator = sortingCoordinator {
                 coordinator.updateVariant(
-                    store: newStore,
+                    source: newStore,
                     suggester: AlbumSuggester(),
                     correctionStore: newCorrectionStore,
                     modelID: variant.modelID
                 )
             } else {
                 self.sortingCoordinator = SortingCoordinator(
-                    store: newStore,
+                    source: newStore,
                     suggester: AlbumSuggester(),
                     albumManager: albums,
                     photoController: library,
@@ -254,7 +346,14 @@ struct PixelCuratorApp: App {
                 )
             }
         } catch {
+            // B-6. Surface the failure to the user via an alert with a
+            // Retry button instead of silently leaving `indexer == nil`.
+            // The most common causes are a corrupt model bundle, a full
+            // disk during model compilation, and a transient PhotoKit
+            // I/O hiccup — all transiently fixable, so a retry is the
+            // right primary action.
             print("PixelCuratorApp: failed to boot indexer for \(variant.displayName): \(error)")
+            self.bootError = BootError(variant: variant, underlying: error)
         }
     }
 
@@ -313,44 +412,227 @@ struct PixelCuratorApp: App {
     /// way only and cleared on app teardown.
     @MainActor
     private func installLibraryChangeCascade() {
+        // F-02. The closure is the gated entrypoint; it never touches the
+        // shared `modelContainer.mainContext` directly. If indexing or a
+        // variant switch is in flight, set `cascadeGate.pendingReplay` and
+        // return — the root's `.task(id:)` replay modifier will re-run the
+        // prune once both gates open. Otherwise dispatch to
+        // `runCascadePrune()` immediately. The deferred-replay path is what
+        // keeps the cascade from interleaving `context.save()` with
+        // `EmbeddingIndexer.runIndex`, which writes the same context across
+        // `await embedder.embed(_:)` suspension points.
+        //
+        // Captures: `gate` is weak so the closure (retained by
+        // `PhotoController.onLibraryDidChange`) does not pin the App's
+        // `@State` storage. `runPrune` is a value-typed closure that
+        // captures the run helper indirectly through the same weak gate.
+        let gate = cascadeGate
+        let isIndexingGate: @MainActor () -> Bool = { [weak indexer] in
+            indexer?.isIndexing == true
+        }
+        let isSwitchingGate: @MainActor () -> Bool = { [self] in
+            // `self` is the value-typed App struct; capturing it by value is
+            // safe (no class retain). The `_isSwitchingVariant` projection
+            // reads through SwiftUI's `@State` storage which outlives any
+            // single App body evaluation.
+            self.isSwitchingVariant
+        }
+        let runPrune: @MainActor () async -> Void = { [self] in
+            await self.runCascadePrune()
+        }
+        library.onLibraryDidChange = { @MainActor [weak gate] in
+            // Route through `CascadeGate.deferIfBusy` so unit tests can
+            // exercise the same gate semantics directly (see
+            // CascadeRaceTests).
+            let deferred = gate?.deferIfBusy(
+                isIndexing: isIndexingGate(),
+                isSwitchingVariant: isSwitchingGate()
+            ) ?? false
+            if deferred { return }
+            await runPrune()
+        }
+    }
+
+    /// F-02 trailing-edge replay hook. Wired to `.task(id:)` on the root —
+    /// rerun whenever `isIndexing` or `isSwitchingVariant` changes. The body
+    /// re-checks both gates (the id can fire on a closing edge too) and only
+    /// drains a pending cascade when both gates are open.
+    @MainActor
+    private func replayCascadeIfPending() async {
+        let shouldReplay = cascadeGate.consumePendingReplay(
+            isIndexing: indexer?.isIndexing == true,
+            isSwitchingVariant: isSwitchingVariant
+        )
+        guard shouldReplay else { return }
+        await runCascadePrune()
+    }
+
+    /// Performs the cascade prune across `EmbeddingStore`, `CorrectionStore`,
+    /// and `DecisionLog`, then saves the shared `mainContext`. Pulled out of
+    /// `installLibraryChangeCascade` so the trailing-edge replay path can
+    /// reuse the identical body without duplicating the prune order.
+    ///
+    /// F-10/F-11. This routine is **destructive** — it deletes rows whose
+    /// `localIdentifier` is not in `library.assets`. Under reduced
+    /// authorization states `library.assets` does NOT represent "every
+    /// photo the user owns":
+    ///
+    ///   - `.limited`: `PHAsset.fetchAssets` returns only the user-picked
+    ///     subset. The other photos still exist; we just can't see them
+    ///     right now. Pruning would wipe embeddings for tens of thousands
+    ///     of perfectly valid assets every time the Limited-Library
+    ///     selection changes.
+    ///   - `.denied` / `.restricted`: `library.assets` is `[]` (the change
+    ///     handler clears it). Pruning would erase the entire derived
+    ///     dataset on a transient permission revoke — exactly the F-11
+    ///     symptom: 10k+ embeddings lost on a single auth flicker.
+    ///   - `.authorized`: `library.assets` is the full library snapshot,
+    ///     so pruning against it is correct.
+    ///
+    /// We therefore skip the prune unless `library.authState == .authorized`.
+    /// A destructive index wipe remains available on demand via
+    /// Settings → Delete Index (see F-19).
+    @MainActor
+    private func runCascadePrune() async {
         let context = modelContainer.mainContext
         let embeddings = EmbeddingStore(context: context)
         let corrections = CorrectionStore(context: context)
-        // Capture `library` and `albums` weakly: each retains its own
-        // `onLibraryDidChange` closure, so a strong capture would create a
-        // retain cycle. `sharedDecisionLog` is captured weakly for symmetry —
-        // if the log is ever recreated the cascade should pick up the new one
-        // via the next `installLibraryChangeCascade` rather than fire on a
-        // stale instance.
-        library.onLibraryDidChange = { [weak library, weak albums, weak sharedDecisionLog] in
-            guard let library, let albums else { return }
-            // Reload albums first so the prune sees current state. PhotoController
-            // already reloaded `assets` before invoking this callback.
-            albums.loadAlbums()
 
-            let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
-            let livingAlbumIDs = Set(albums.albums.map(\.id))
-            let livingAlbumNames = Set(albums.albums.map(\.title))
+        // Reload albums first so the prune sees current state. PhotoController
+        // already reloaded `assets` before invoking the cascade closure.
+        albums.loadAlbums()
 
-            embeddings.prune(keeping: livingAssetIDs)
-            corrections.prune(
-                keepingAssetIDs: livingAssetIDs,
-                livingAlbumNames: livingAlbumNames
-            )
-            sharedDecisionLog?.prune(
-                keepingAssets: livingAssetIDs,
-                livingAlbumIDs: livingAlbumIDs
-            )
+        // F-10/F-11. Skip the prune unless we're operating against the
+        // full library snapshot. `.limited` and `.denied` / `.restricted`
+        // both produce a partial `library.assets` view; treating every
+        // off-list asset as deleted is what destroyed user embeddings on
+        // transient auth changes. The gate decision is factored into a
+        // pure static so unit tests can exercise the policy without
+        // standing up the full App.
+        guard CascadeGate.shouldRunDestructivePrune(authState: library.authState) else {
+            return
+        }
 
-            // Persist the prune. Failing to save here means a relaunch could
-            // reload the now-pruned rows from disk.
-            do {
-                try context.save()
-            } catch {
-                print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
-            }
+        let livingAssetIDs = Set(library.assets.map(\.localIdentifier))
+        let livingAlbumIDs = Set(albums.albums.map(\.id))
+        let livingAlbumNames = Set(albums.albums.map(\.title))
+
+        embeddings.prune(keeping: livingAssetIDs)
+        corrections.prune(
+            keepingAssetIDs: livingAssetIDs,
+            livingAlbumNames: livingAlbumNames
+        )
+        sharedDecisionLog?.prune(
+            keepingAssets: livingAssetIDs,
+            livingAlbumIDs: livingAlbumIDs
+        )
+
+        // Persist the prune. Failing to save here means a relaunch could
+        // reload the now-pruned rows from disk.
+        do {
+            try context.save()
+        } catch {
+            print("PixelCuratorApp: failed to save after library-change cascade: \(error)")
         }
     }
+}
+
+// MARK: - BootError
+
+/// B-6. Failure record from `bootIndexer(variant:)` — carried via
+/// `@State private var bootError` so the root view can present a Retry alert.
+/// The `variant` is needed because Retry should re-attempt the *same* variant
+/// the user (or the initial boot) requested, not whatever `activeVariant`
+/// has drifted to in the meantime. Value-typed so it composes with SwiftUI
+/// state diffing. `Identifiable` makes it eligible for the
+/// `alert(_:isPresented:presenting:)` overload that re-renders cleanly on
+/// repeated failures (different `id` → fresh alert).
+struct BootError: Identifiable {
+    let id = UUID()
+    let variant: CLIPVariant
+    let underlying: Error
+}
+
+/// F-02. Identity wrapper for the cascade-replay `.task(id:)` modifier.
+/// Hashable equality flips whenever either gate (indexing in flight, variant
+/// switch in flight) changes value, which is exactly when the cascade may
+/// have unblocked.
+private struct CascadeReplayKey: Hashable {
+    let isIndexing: Bool
+    let isSwitchingVariant: Bool
+}
+
+/// F-02. Mutable holder for the pending-replay flag. A reference type lets
+/// the cascade closure (stored on `PhotoController.onLibraryDidChange`,
+/// outliving any single App body evaluation) mutate the flag via a weak
+/// capture without retaining the App's value-typed `@State` storage. Marked
+/// `@MainActor` because both the cascade closure and the replay reader run
+/// on the main actor.
+@MainActor
+final class CascadeGate {
+    var pendingReplay: Bool = false
+
+    /// F-02 gate-decision shim. Pure function over `(isIndexing,
+    /// isSwitchingVariant)` so unit tests can exercise the deferral semantics
+    /// without spinning up a full `PixelCuratorApp` (the closure that
+    /// `installLibraryChangeCascade` installs on `PhotoController` is a
+    /// private member of an `@main` App struct and is not directly
+    /// instantiable from tests).
+    ///
+    /// - Returns: `true` if the change should be deferred (and the caller
+    ///   should NOT run the prune); `false` if the cascade is free to run.
+    ///   Mutates `pendingReplay` to `true` when deferring.
+    @discardableResult
+    func deferIfBusy(isIndexing: Bool, isSwitchingVariant: Bool) -> Bool {
+        if isIndexing || isSwitchingVariant {
+            pendingReplay = true
+            return true
+        }
+        return false
+    }
+
+    /// F-02 replay-decision shim. Mirror of `replayCascadeIfPending` semantics
+    /// in pure-function form. Returns `true` when the caller should run the
+    /// prune (and clears `pendingReplay` as a side effect).
+    @discardableResult
+    func consumePendingReplay(isIndexing: Bool, isSwitchingVariant: Bool) -> Bool {
+        guard pendingReplay, !isIndexing, !isSwitchingVariant else { return false }
+        pendingReplay = false
+        return true
+    }
+
+    /// F-10/F-11. Decision shim for the destructive prune in
+    /// `PixelCuratorApp.runCascadePrune`. Pure function over
+    /// `PhotoController.AuthState` so unit tests can lock the policy
+    /// without standing up the App.
+    ///
+    /// - Returns: `true` only when `library.assets` is known to be the
+    ///   full library snapshot (`.authorized`). All other states return
+    ///   `false`:
+    ///   - `.limited`: `PHAsset.fetchAssets` returns only the user-picked
+    ///     subset. Pruning would wipe embeddings for every off-list asset.
+    ///   - `.denied` / `.restricted`: `library.assets` is empty; pruning
+    ///     would erase the entire derived dataset on a transient revoke.
+    ///   - `.unknown`: pre-determination state — never destructive.
+    static func shouldRunDestructivePrune(authState: PhotoController.AuthState) -> Bool {
+        switch authState {
+        case .authorized: return true
+        case .limited, .denied, .restricted, .unknown: return false
+        }
+    }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// F-12. Posted on the main thread the moment the shared `DecisionLog`
+    /// records its first decision in the current app launch. Observers (the
+    /// grid and inbox toast helpers) decide whether to render the
+    /// session-only Undo hint by consulting an `@AppStorage` flag — the
+    /// notification itself fires once per launch unconditionally.
+    static let pixelCuratorFirstDecisionRecorded = Notification.Name(
+        "PixelCurator.firstDecisionRecorded"
+    )
 }
 
 // MARK: - Environment keys

@@ -93,15 +93,20 @@ jobs:
           PY
           JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
 
-          # Probe the Xcode Cloud "Release -> TestFlight External" workflow's
-          # recent runs (this GHA workflow now mirrors that one — tag-only,
-          # APP_STORE_ELIGIBLE). When Xcode Cloud is quota-out, ALL workflows
-          # (including Release) show the CANCELED-with-null-cancelReason-and-
-          # null-startedDate signature - confirmed 2026-06-23.
-          RELEASE_WORKFLOW="6bb83629-1aab-4bcf-930e-4be4366b49f3"
+          # Probe the Xcode Cloud "CI - main (tests)" workflow's recent runs,
+          # same as the iOS twin. Previously this probed the "Release ->
+          # TestFlight External" workflow (6bb83629-...), but that workflow
+          # has NEVER produced a buildRun (Apple's tag webhook doesn't fire
+          # for it — observed on v0.1.0 and v0.1.1), so its run list is empty
+          # and the guard concluded "healthy" and no-oped on the tag push
+          # (2026-07-11). The main workflow runs on every push and gives a
+          # live quota signal: when Xcode Cloud is quota-out, ALL workflows
+          # show the CANCELED-with-null-cancelReason-and-null-startedDate
+          # signature - confirmed 2026-06-23.
+          MAIN_WORKFLOW="2116F53B-1ACE-49B9-B06F-0F5E394B1354"
           for attempt in 1 2 3; do
             HTTP=$(curl -sS -G -o /tmp/resp.json -w "%{http_code}" \
-              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$RELEASE_WORKFLOW/buildRuns" \
+              "https://api.appstoreconnect.apple.com/v1/ciWorkflows/$MAIN_WORKFLOW/buildRuns" \
               -H "Authorization: Bearer $JWT" \
               --data-urlencode "limit=10" \
               --data-urlencode "sort=-number")
@@ -126,7 +131,7 @@ jobs:
           print(bad)
           PY
           )
-          echo "Recent quota-out signatures: $BAD of last 5 Release-workflow runs"
+          echo "Recent quota-out signatures: $BAD of last 5 main-CI runs"
           if [ "$BAD" -ge 3 ]; then
             echo "quota_out=true" >> "$GITHUB_OUTPUT"
             echo "reason=xcode-cloud-quota-out" >> "$GITHUB_OUTPUT"

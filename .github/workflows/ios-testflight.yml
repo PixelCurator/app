@@ -169,7 +169,10 @@ jobs:
           persist-credentials: false
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+        # ASC rejects iOS uploads built with pre-26 SDKs since Apple's 2026
+        # deadline (altool 409: "must be built with the iOS 26 SDK or later").
+        # macOS uploads are not affected yet — the macOS twin stays on 16.4.
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Show toolchain
         run: |

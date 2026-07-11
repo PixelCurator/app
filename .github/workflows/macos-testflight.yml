@@ -16,6 +16,10 @@
 # (Xcode Cloud "CI - main (tests)" no longer archives - see
 # update_main_workflow_tests_only.rb in PixelCurator-strategy).
 #
+# Build number + marketing version are stamped into project.yml before
+# xcodegen, mirroring ios-testflight.yml: CFBundleVersion = max(all existing
+# build numbers via ASC API) + 1, MARKETING_VERSION from the pushed v* tag.
+#
 # Required secrets (in addition to ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY):
 #   APPLE_DISTRIBUTION_CERT_BASE64      .p12 of "Apple Distribution" — signs the .app
 #   APPLE_INSTALLER_CERT_BASE64         .p12 of "Mac Installer Distribution" — signs the .pkg
@@ -184,6 +188,98 @@ jobs:
 
       - name: Install xcodegen
         run: brew install xcodegen
+
+      - name: Resolve next build number from ASC API
+        id: build_number
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # Compute next CFBundleVersion as max(existing build versions across
+          # iOS + macOS for this app) + 1. Mirrors ios-testflight.yml exactly.
+          # Without this the committed project.yml CURRENT_PROJECT_VERSION is
+          # uploaded verbatim, which collides with any previously uploaded
+          # macOS build carrying the same number.
+          umask 077
+          printf '%s' "$ASC_PRIVATE_KEY" > /tmp/asc.p8
+          python3 - <<'PY' > /tmp/jwt.txt
+          import os, json, time, base64
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec, utils
+          b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+          key = serialization.load_pem_private_key(open('/tmp/asc.p8','rb').read(), password=None)
+          header = {"alg":"ES256","kid":os.environ['ASC_KEY_ID'],"typ":"JWT"}
+          payload = {"iss":os.environ['ASC_ISSUER_ID'],"exp":int(time.time())+600,"aud":"appstoreconnect-v1"}
+          si = (b64u(json.dumps(header).encode()) + '.' + b64u(json.dumps(payload).encode())).encode()
+          der = key.sign(si, ec.ECDSA(hashes.SHA256()))
+          r,s = utils.decode_dss_signature(der)
+          print(si.decode() + '.' + b64u(r.to_bytes(32,'big') + s.to_bytes(32,'big')))
+          PY
+          JWT=$(cat /tmp/jwt.txt); rm /tmp/asc.p8 /tmp/jwt.txt
+
+          APP_ID=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/apps" \
+            -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[bundleId]=$BUNDLE_ID" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])")
+          echo "Resolved app id: $APP_ID"
+
+          MAX_VERSION=$(curl -sS -G "https://api.appstoreconnect.apple.com/v1/builds" \
+            -H "Authorization: Bearer $JWT" \
+            --data-urlencode "filter[app]=$APP_ID" \
+            --data-urlencode "sort=-uploadedDate" \
+            --data-urlencode "limit=200" | \
+            python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          versions = []
+          for b in d.get('data', []):
+              v = b['attributes'].get('version')
+              if v is not None:
+                  try:
+                      versions.append(int(v))
+                  except ValueError:
+                      pass
+          print(max(versions) if versions else 0)
+          ")
+          NEXT=$((MAX_VERSION + 1))
+          echo "Highest existing build number: $MAX_VERSION -> next: $NEXT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve marketing version from tag
+        id: marketing_version
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF#refs/tags/}"
+          # workflow_dispatch on a non-tag ref - fall back to the committed
+          # MARKETING_VERSION so the verification path still produces a
+          # consistent .pkg (just won't be a v-tag build).
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            COMMITTED=$(grep -E '^[[:space:]]+MARKETING_VERSION:' project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            echo "Non-tag dispatch - using committed MARKETING_VERSION=$COMMITTED"
+            echo "version=$COMMITTED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Strip leading v from semver tag (v0.1.0 -> 0.1.0).
+          VERSION="${REF#v}"
+          echo "Tag $REF -> MARKETING_VERSION=$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp project.yml version + build number
+        env:
+          NEXT_BUILD: ${{ steps.build_number.outputs.next }}
+          MARKETING_VERSION: ${{ steps.marketing_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Same sed pattern as ci_scripts/ci_post_clone.sh - stamps the
+          # project.yml BEFORE xcodegen runs, so the auto-generated Info.plist
+          # (GENERATE_INFOPLIST_FILE=YES) picks up the right values.
+          sed -i.bak -E "s/^([[:space:]]+CURRENT_PROJECT_VERSION:)[[:space:]].*/\1 \"$NEXT_BUILD\"/" project.yml
+          sed -i.bak -E "s/^([[:space:]]+MARKETING_VERSION:)[[:space:]].*/\1 \"$MARKETING_VERSION\"/" project.yml
+          rm -f project.yml.bak
+          echo "Stamped:"
+          grep -E '^[[:space:]]+(CURRENT_PROJECT_VERSION|MARKETING_VERSION):' project.yml
 
       - name: Generate Xcode project
         run: xcodegen

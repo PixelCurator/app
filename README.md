@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="PixelCurator/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" width="128" alt="PixelCurator app icon">
+</p>
+
 # PixelCurator (native app)
 
 <!-- OpenSSF Scorecard badge — the api.scorecard.dev badge only resolves for

@@ -230,26 +230,31 @@ final class EmbeddingIndexerVariantSwitchTests: XCTestCase {
 
     // MARK: - N-7 gate
 
-    /// SwiftData `ModelContext.save()` against an in-memory store SIGTRAPs on
-    /// OS 26 (backlog N-7, issue #91, Apple FB pending). The cancel path these tests
-    /// exercise calls `context.save()` on every embed, so they inherit the
-    /// trap. Skip until Apple fixes the underlying SwiftData bug.
+    /// These two tests trap inside SwiftData (EXC_BREAKPOINT / SIGTRAP) on
+    /// the cancel path — backlog N-7, issue #91. The faulting frame is a
+    /// SwiftData call under `EmbeddingStore.unindexableRecords(modelID:)`,
+    /// reached from `EmbeddingIndexer.runIndex(assets:)`.
     ///
-    /// Deliberately NOT scoped to `targetEnvironment(simulator)` any more. The
-    /// trap was first seen on an iOS 26 simulator, which is why the guard was
-    /// originally written that way — but it reproduces natively on macOS 26,
-    /// where the simulator-only scoping meant the guard never fired and these
-    /// two tests crashed the test host outright (`Crash: PixelCurator at
-    /// <external symbol>`) rather than skipping.
+    /// Where it happens, measured:
     ///
-    /// On OS 26 that meant a green suite on the simulator with these two
-    /// tests skipped, and a crashed test host on macOS. Real coverage for the
-    /// cancel path therefore comes only from pre-26 runtimes — which is what
-    /// CI runs today (Xcode 16.4: iOS 18 simulator, macOS 15). See #91.
+    ///     iOS 18 simulator (CI, Xcode 16.4)   passes
+    ///     iOS 26 simulator                    traps  (original N-7 report)
+    ///     macOS 15 (CI hosted runner)         crashes the test host
+    ///     macOS 26 (local)                    crashes the test host
+    ///
+    /// So on macOS it is not tied to OS 26 at all. The guard used to be
+    /// `#if targetEnvironment(simulator)` plus an OS 26 check, which never
+    /// fired on macOS; nothing ran the macOS destination until PR CI got a
+    /// macOS leg, so the crash went unseen. The iOS 18 leg still executes both
+    /// tests, which is the only real coverage of this path today.
     private static func skipIfBlockedByN7() throws {
+        #if os(macOS)
+        throw XCTSkip("Skipped on macOS: SwiftData trap under EmbeddingStore.unindexableRecords (N-7, #91).")
+        #else
         if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
-            throw XCTSkip("Skipped on OS 26+: SwiftData in-memory ModelContext SIGTRAP (N-7).")
+            throw XCTSkip("Skipped on iOS 26+: SwiftData trap under EmbeddingStore.unindexableRecords (N-7, #91).")
         }
+        #endif
     }
 
     // MARK: - Polling helper

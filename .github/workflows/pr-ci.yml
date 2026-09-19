@@ -1,0 +1,122 @@
+# PR CI for PixelCurator.
+#
+# History: this file began as a *fallback*. Apple's Xcode Cloud free tier has a
+# 25h/month compute quota, and when it is exhausted every PR build silently
+# CANCELs (cancelReason=null, startedDate=null). A `quota-check` job polled the
+# App Store Connect API and ran the tests below ONLY when Xcode Cloud looked
+# quota-out, to conserve paid GitHub macOS minutes.
+#
+# That trade no longer exists. This repository is PUBLIC, and GitHub Actions
+# standard runners — macOS included — are free on public repositories. Measured
+# on run 33615702543, whose macos-15 job ran for ~23 minutes:
+#
+#     GET /repos/PixelCurator/app/actions/runs/33615702543/timing
+#     "billable": { "MACOS": { "total_ms": 0, ... } }
+#
+# Nothing was being conserved, and the cost of the guard was real: while Xcode
+# Cloud reported healthy, GitHub Actions ran no tests at all, so a PR's only
+# verification lived in a service that stops without warning when a quota runs
+# out. The tests now run on every PR.
+#
+# Both destinations run: the app ships for iOS and macOS (project.yml,
+# supportedDestinations), and until now nothing tested macOS at all — Xcode
+# Cloud's macOS leg was the only one, and it is the first to stop when the
+# quota runs out. Running it locally surfaced a test-host crash that had gone
+# unnoticed for exactly that reason (#91).
+name: PR CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch / SHA / tag to test (default: triggering ref)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Cancel any older in-flight run for the same ref when a new push arrives —
+# matches Xcode Cloud's `autoCancel: true`. Keeps a push-happy branch from
+# holding several macOS runners on results nobody will read.
+concurrency:
+  group: pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: xcodebuild test (UnitTests plan, ${{ matrix.platform }})
+    runs-on: macos-15
+    # macOS measured at ~7.5 min for the plan on an M-series laptop; the
+    # hosted runner is slower. 45 min keeps a hang from holding the runner.
+    timeout-minutes: 45
+    strategy:
+      # Independent destinations — a macOS failure must not hide the iOS
+      # result, or the other way round.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: iOS Simulator
+            slug: ios
+            destination: "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
+          - platform: macOS
+            slug: macos
+            destination: "platform=macOS"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Show available simulators
+        if: matrix.slug == 'ios'
+        run: xcrun simctl list devices available | head -40
+
+      - name: Build for testing
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project PixelCurator.xcodeproj \
+            -scheme PixelCurator \
+            -destination "${{ matrix.destination }}" \
+            -testPlan UnitTests \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Run UnitTests plan
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project PixelCurator.xcodeproj \
+            -scheme PixelCurator \
+            -destination "${{ matrix.destination }}" \
+            -testPlan UnitTests \
+            -resultBundlePath build/UnitTests.xcresult
+
+      - name: Upload xcresult bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: UnitTests-xcresult-${{ matrix.slug }}
+          path: build/UnitTests.xcresult
+          if-no-files-found: warn
+          retention-days: 7

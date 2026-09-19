@@ -231,16 +231,25 @@ final class EmbeddingIndexerVariantSwitchTests: XCTestCase {
     // MARK: - N-7 gate
 
     /// SwiftData `ModelContext.save()` against an in-memory store SIGTRAPs on
-    /// iOS 26 simulators (backlog N-7, Apple FB pending). The cancel-path
-    /// these tests exercise calls `context.save()` on every embed, so they
-    /// inherit the trap on the affected runtime. Skip until Apple fixes the
-    /// underlying SwiftData bug.
+    /// OS 26 (backlog N-7, issue #91, Apple FB pending). The cancel path these tests
+    /// exercise calls `context.save()` on every embed, so they inherit the
+    /// trap. Skip until Apple fixes the underlying SwiftData bug.
+    ///
+    /// Deliberately NOT scoped to `targetEnvironment(simulator)` any more. The
+    /// trap was first seen on an iOS 26 simulator, which is why the guard was
+    /// originally written that way — but it reproduces natively on macOS 26,
+    /// where the simulator-only scoping meant the guard never fired and these
+    /// two tests crashed the test host outright (`Crash: PixelCurator at
+    /// <external symbol>`) rather than skipping.
+    ///
+    /// On OS 26 that meant a green suite on the simulator with these two
+    /// tests skipped, and a crashed test host on macOS. Real coverage for the
+    /// cancel path therefore comes only from pre-26 runtimes — which is what
+    /// CI runs today (Xcode 16.4: iOS 18 simulator, macOS 15). See #91.
     private static func skipIfBlockedByN7() throws {
-        #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
-            throw XCTSkip("Skipped on iOS 26+ simulator: SwiftData in-memory ModelContext SIGTRAP (N-7).")
+            throw XCTSkip("Skipped on OS 26+: SwiftData in-memory ModelContext SIGTRAP (N-7).")
         }
-        #endif
     }
 
     // MARK: - Polling helper
